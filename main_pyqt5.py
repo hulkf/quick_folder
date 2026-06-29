@@ -1013,6 +1013,10 @@ class QuickFolderPanel(QMainWindow):
         add_btn.clicked.connect(self.merge_add_folder)
         header.addWidget(add_btn)
 
+        paste_btn = QPushButton("📋 粘贴文件夹")
+        paste_btn.clicked.connect(self.merge_paste_folders)
+        header.addWidget(paste_btn)
+
         clear_btn = QPushButton("🗑 清空")
         clear_btn.clicked.connect(self.merge_clear_list)
         header.addWidget(clear_btn)
@@ -1024,7 +1028,7 @@ class QuickFolderPanel(QMainWindow):
         self.merge_list.setDragDropMode(QListWidget.InternalMove)
         layout.addWidget(self.merge_list, 1)
 
-        # 输出目录
+        # 输出目录 + 开始合并按钮（同一行）
         output_layout = QHBoxLayout()
         output_label = QLabel("输出目录:")
         output_label.setStyleSheet(f"color: {self.theme['fg']};")
@@ -1038,12 +1042,8 @@ class QuickFolderPanel(QMainWindow):
         select_btn.clicked.connect(self.merge_select_output)
         output_layout.addWidget(select_btn)
 
-        layout.addLayout(output_layout)
-
-        # 开始合并按钮
-        merge_btn_row = QHBoxLayout()
         merge_btn = QPushButton("▶ 开始合并")
-        merge_btn.setMinimumHeight(32)
+        merge_btn.setFixedHeight(30)
         merge_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme['accent']};
@@ -1057,10 +1057,9 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         merge_btn.clicked.connect(self.merge_start)
-        merge_btn_row.addStretch()
-        merge_btn_row.addWidget(merge_btn)
-        merge_btn_row.addStretch()
-        layout.addLayout(merge_btn_row)
+        output_layout.addWidget(merge_btn)
+
+        layout.addLayout(output_layout)
 
         # 进度条
         self.merge_progress = QProgressBar()
@@ -1083,11 +1082,11 @@ class QuickFolderPanel(QMainWindow):
         header.addWidget(title)
         header.addStretch()
 
-        add_btn = QPushButton("+ 添加文件")
+        add_btn = QPushButton("📁 添加文件夹")
         add_btn.clicked.connect(self.extract_add_files)
         header.addWidget(add_btn)
 
-        paste_btn = QPushButton("📋 粘贴文件")
+        paste_btn = QPushButton("📋 粘贴文件夹")
         paste_btn.clicked.connect(self.extract_paste_files)
         header.addWidget(paste_btn)
 
@@ -1101,7 +1100,7 @@ class QuickFolderPanel(QMainWindow):
         self.extract_list = QListWidget()
         layout.addWidget(self.extract_list, 1)
 
-        # 底部：输出目录和解压按钮
+        # 底部：输出目录 + 解压按钮（同一行）
         bottom_layout = QHBoxLayout()
 
         output_label = QLabel("解压到:")
@@ -1116,42 +1115,38 @@ class QuickFolderPanel(QMainWindow):
         select_btn.clicked.connect(self.extract_select_output)
         bottom_layout.addWidget(select_btn)
 
-        layout.addLayout(bottom_layout)
-
-        # 选项行：独立文件夹 + 解压按钮
-        option_layout = QHBoxLayout()
-
-        # 独立文件夹选项
-        self.extract_separate_check = QCheckBox("独立文件夹")
-        self.extract_separate_check.setChecked(False)
-        self.extract_separate_check.setStyleSheet(f"color: {self.theme['fg']};")
-        option_layout.addWidget(self.extract_separate_check)
-
-        # 提示文字
-        hint_label = QLabel("（每个压缩包解压到对应名称文件夹）")
-        hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
-        option_layout.addWidget(hint_label)
-
-        option_layout.addStretch()
-
-        # 解压按钮
         extract_btn = QPushButton("▶ 开始解压")
-        extract_btn.setMinimumHeight(30)
+        extract_btn.setFixedHeight(30)
         extract_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme['accent']};
                 color: white;
                 font-weight: bold;
                 border-radius: 4px;
-                padding: 6px 16px;
+                padding: 6px 20px;
             }}
             QPushButton:hover {{
                 background-color: {self.theme['accent_hover']};
             }}
         """)
         extract_btn.clicked.connect(self.extract_start)
-        option_layout.addWidget(extract_btn)
+        bottom_layout.addWidget(extract_btn)
 
+        layout.addLayout(bottom_layout)
+
+        # 选项行：独立文件夹
+        option_layout = QHBoxLayout()
+
+        self.extract_separate_check = QCheckBox("独立文件夹")
+        self.extract_separate_check.setChecked(False)
+        self.extract_separate_check.setStyleSheet(f"color: {self.theme['fg']};")
+        option_layout.addWidget(self.extract_separate_check)
+
+        hint_label = QLabel("（每个压缩包解压到对应名称文件夹）")
+        hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        option_layout.addWidget(hint_label)
+
+        option_layout.addStretch()
         layout.addLayout(option_layout)
 
         # 进度条
@@ -1543,6 +1538,30 @@ class QuickFolderPanel(QMainWindow):
 
                 # 更新输出目录建议
                 self.update_merge_output_suggestion()
+
+    def merge_paste_folders(self):
+        """从剪贴板粘贴文件夹"""
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+
+        if mime.hasUrls():
+            added = 0
+            for url in mime.urls():
+                path = url.toLocalFile()
+                if path and os.path.isdir(path):
+                    display_name = os.path.basename(path) or path
+                    if not any(self.merge_list.item(i).data(Qt.UserRole, None) == path
+                              for i in range(self.merge_list.count())):
+                        item = QListWidgetItem(f"📁 {display_name}  ({path})")
+                        item.setData(Qt.UserRole, path)
+                        self.merge_list.addItem(item)
+                        added += 1
+            if added > 0:
+                self.update_merge_output_suggestion()
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有新的文件夹")
+        else:
+            QMessageBox.information(self, "提示", "剪贴板中没有文件夹数据")
 
     def merge_clear_list(self):
         """清空合并列表"""

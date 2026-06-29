@@ -1013,23 +1013,9 @@ class QuickFolderPanel(QMainWindow):
         add_btn.clicked.connect(self.merge_add_folder)
         header.addWidget(add_btn)
 
-        clear_btn = QPushButton("🗑 清空列表")
+        clear_btn = QPushButton("🗑 清空")
         clear_btn.clicked.connect(self.merge_clear_list)
         header.addWidget(clear_btn)
-
-        merge_btn = QPushButton("▶ 开始合并")
-        merge_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.theme['accent']};
-                color: white;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme['accent_hover']};
-            }}
-        """)
-        merge_btn.clicked.connect(self.merge_start)
-        header.addWidget(merge_btn)
 
         layout.addLayout(header)
 
@@ -1053,6 +1039,28 @@ class QuickFolderPanel(QMainWindow):
         output_layout.addWidget(select_btn)
 
         layout.addLayout(output_layout)
+
+        # 开始合并按钮
+        merge_btn_row = QHBoxLayout()
+        merge_btn = QPushButton("▶ 开始合并")
+        merge_btn.setMinimumHeight(32)
+        merge_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme['accent']};
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 20px;
+            }}
+            QPushButton:hover {{
+                background-color: {self.theme['accent_hover']};
+            }}
+        """)
+        merge_btn.clicked.connect(self.merge_start)
+        merge_btn_row.addStretch()
+        merge_btn_row.addWidget(merge_btn)
+        merge_btn_row.addStretch()
+        layout.addLayout(merge_btn_row)
 
         # 进度条
         self.merge_progress = QProgressBar()

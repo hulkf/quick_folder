@@ -230,12 +230,8 @@ class QuickFolderPanel:
         self.main = tk.Frame(self.root, bg=C["bg"], bd=1, relief=tk.RAISED)
         self.main.pack(fill=tk.BOTH, expand=True)
 
-        self._build_titlebar()
-
-        # Init tab state before building tabbar
         self._tab_buttons = {}
-
-        self._build_tabbar()
+        self._build_titlebar()
 
         # Tab content container
         self.tab_container = tk.Frame(self.main, bg=C["bg"])
@@ -269,11 +265,15 @@ class QuickFolderPanel:
             font=("Segoe UI", 10), pady=12,
         )
 
-        # ---- Tab 2: 文件解压 ----
+        # ---- Tab 2: 文件夹合并 ----
+        self.tab_merge = tk.Frame(self.tab_container, bg=C["bg"])
+        self._build_merge_tab()
+
+        # ---- Tab 3: 文件解压 ----
         self.tab_extract = tk.Frame(self.tab_container, bg=C["bg"])
         self._build_extract_tab()
 
-        # ---- Tab 3: 设置 ----
+        # ---- Tab 4: 设置 ----
         self.tab_settings = tk.Frame(self.tab_container, bg=C["bg"])
         self._build_settings_tab()
 
@@ -282,14 +282,14 @@ class QuickFolderPanel:
             self.root.after(100, self._setup_drag_drop)
 
         # Register tabs and show default
-        self._tabs = {"folder": self.tab_folder, "extract": self.tab_extract, "settings": self.tab_settings}
+        self._tabs = {"folder": self.tab_folder, "merge": self.tab_merge, "extract": self.tab_extract, "settings": self.tab_settings}
         self._active_tab = None
         self._show_tab("folder")
 
     # ---------- 标题栏 ----------
 
     def _build_titlebar(self):
-        bar = tk.Frame(self.main, bg=C["title_bg"], height=38)
+        bar = tk.Frame(self.main, bg=C["title_bg"], height=36)
         bar.pack(fill=tk.X)
         bar.pack_propagate(False)
 
@@ -297,18 +297,31 @@ class QuickFolderPanel:
         accent_bar = tk.Frame(bar, bg=C["accent"], width=4)
         accent_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-        # 标题（带置顶状态）
-        self._title_lbl = tk.Label(bar, text="📁 Quick Folder",
-                                   bg=C["title_bg"], fg=C["fg"],
-                                   font=("Segoe UI", 10, "bold"))
-        self._title_lbl.pack(side=tk.LEFT, padx=8)
+        # 窗口拖动（绑定在 bar 上）
+        bar.bind("<ButtonPress-1>", self._win_drag_start)
+        bar.bind("<B1-Motion>", self._win_drag_move)
 
-        # 窗口拖动
-        for w in (bar, self._title_lbl):
-            w.bind("<ButtonPress-1>", self._win_drag_start)
-            w.bind("<B1-Motion>", self._win_drag_move)
+        # Tab 按钮（嵌入标题栏）
+        self._tab_buttons = {}
+        tabs = [
+            ("folder", "📂 文件夹"),
+            ("merge", "📁 合并"),
+            ("extract", "📦 解压"),
+            ("settings", "⚙️ 设置"),
+        ]
 
-        # 右侧按钮（仅通用）
+        for key, label in tabs:
+            btn = tk.Button(bar, text=label,
+                            command=lambda k=key: self._show_tab(k),
+                            bg=C["tab_inactive"], fg=C["gray"], bd=0,
+                            padx=10, pady=0, cursor="hand2",
+                            font=("Segoe UI", 9),
+                            activebackground=C["tab_hover"],
+                            activeforeground=C["fg"])
+            btn.pack(side=tk.LEFT, padx=1, pady=4)
+            self._tab_buttons[key] = btn
+
+        # 右侧按钮
         bf = tk.Frame(bar, bg=C["title_bg"])
         bf.pack(side=tk.RIGHT, padx=6)
 
@@ -318,38 +331,6 @@ class QuickFolderPanel:
 
         # 关闭
         self._tb_btn(bf, "✕", self.root.quit, hover_bg=C["danger"]).pack(side=tk.LEFT, padx=2)
-
-    # ---------- Tab 栏 ----------
-
-    def _build_tabbar(self):
-        # 分隔线
-        sep = tk.Frame(self.main, bg=C["border"], height=1)
-        sep.pack(fill=tk.X)
-
-        bar = tk.Frame(self.main, bg=C["title_bg"], height=34)
-        bar.pack(fill=tk.X)
-        bar.pack_propagate(False)
-
-        tabs = [
-            ("folder", "📂 快捷文件夹"),
-            ("extract", "📦 文件解压"),
-            ("settings", "⚙️ 设置"),
-        ]
-
-        for key, label in tabs:
-            btn = tk.Button(bar, text=label,
-                            command=lambda k=key: self._show_tab(k),
-                            bg=C["tab_inactive"], fg=C["gray"], bd=0,
-                            padx=16, pady=0, cursor="hand2",
-                            font=("Segoe UI", 9),
-                            activebackground=C["tab_hover"],
-                            activeforeground=C["fg"])
-            btn.pack(side=tk.LEFT, padx=2, pady=4)
-            self._tab_buttons[key] = btn
-
-        # Tab 栏底部也加分隔线
-        sep2 = tk.Frame(self.main, bg=C["border"], height=1)
-        sep2.pack(fill=tk.X)
 
     def _show_tab(self, key: str):
         if key == self._active_tab:
@@ -365,6 +346,180 @@ class QuickFolderPanel:
         # Refresh folder tab if switching to it (no auto_size to avoid flicker)
         if key == "folder":
             self.refresh(auto_size=False)
+
+    # ---------- 文件夹合并 Tab ----------
+
+    def _build_merge_tab(self):
+        self._merge_folders = []  # [(path, display_name), ...]
+        self._merge_output_dir = ""
+
+        # Top bar with title and buttons
+        top = tk.Frame(self.tab_merge, bg=C["bg"])
+        top.pack(fill=tk.X, padx=8, pady=8)
+
+        tk.Label(top, text="📁 文件夹合并", bg=C["bg"], fg=C["fg"],
+                 font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT, padx=4)
+
+        # Buttons
+        btn_frame = tk.Frame(top, bg=C["bg"])
+        btn_frame.pack(side=tk.RIGHT)
+
+        btn_add = tk.Button(btn_frame, text="📁 添加文件夹",
+                           command=self._merge_add_folder,
+                           bg=C["accent"], fg=C["fg"], bd=0,
+                           padx=12, pady=4, cursor="hand2",
+                           font=("Segoe UI", 9))
+        btn_add.pack(side=tk.LEFT, padx=4)
+        btn_add.bind("<Enter>", lambda e: btn_add.config(bg=C["accent_hover"]))
+        btn_add.bind("<Leave>", lambda e: btn_add.config(bg=C["accent"]))
+
+        btn_clear = tk.Button(btn_frame, text="🗑 清空列表",
+                             command=self._merge_clear_list,
+                             bg=C["btn_bg"], fg=C["fg"], bd=0,
+                             padx=12, pady=4, cursor="hand2",
+                             font=("Segoe UI", 9))
+        btn_clear.pack(side=tk.LEFT, padx=4)
+        btn_clear.bind("<Enter>", lambda e: btn_clear.config(bg=C["danger"]))
+        btn_clear.bind("<Leave>", lambda e: btn_clear.config(bg=C["btn_bg"]))
+
+        btn_start = tk.Button(btn_frame, text="▶ 开始合并",
+                             command=self._merge_start,
+                             bg=C["accent"], fg=C["fg"], bd=0,
+                             padx=12, pady=4, cursor="hand2",
+                             font=("Segoe UI", 9))
+        btn_start.pack(side=tk.LEFT, padx=4)
+        btn_start.bind("<Enter>", lambda e: btn_start.config(bg=C["accent_hover"]))
+        btn_start.bind("<Leave>", lambda e: btn_start.config(bg=C["accent"]))
+
+        # Folder list
+        list_frame = tk.Frame(self.tab_merge, bg=C["item_bg"], bd=0)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        self._merge_listbox = tk.Listbox(list_frame, bg=C["item_bg"], fg=C["fg"],
+                                          selectbackground=C["accent"], selectforeground="white",
+                                          font=("Segoe UI", 9), bd=0, highlightthickness=0)
+        scrollbar = tk.Scrollbar(list_frame, command=self._merge_listbox.yview)
+        self._merge_listbox.configure(yscrollcommand=scrollbar.set)
+        self._merge_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Output dir section
+        output_frame = tk.Frame(self.tab_merge, bg=C["bg"])
+        output_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        tk.Label(output_frame, text="输出目录:", bg=C["bg"], fg=C["fg"],
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+
+        self._merge_output_var = tk.StringVar(value="当前目录")
+        self._merge_output_entry = tk.Entry(output_frame, textvariable=self._merge_output_var,
+                                             bg=C["item_bg"], fg=C["fg"], font=("Segoe UI", 9),
+                                             bd=0, highlightthickness=1, highlightbackground=C["border"])
+        self._merge_output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+        btn_select = tk.Button(output_frame, text="📂 选择目录",
+                              command=self._merge_select_output,
+                              bg=C["btn_bg"], fg=C["fg"], bd=0,
+                              padx=12, pady=4, cursor="hand2",
+                              font=("Segoe UI", 9))
+        btn_select.pack(side=tk.LEFT)
+        btn_select.bind("<Enter>", lambda e: btn_select.config(bg=C["btn_hover"]))
+        btn_select.bind("<Leave>", lambda e: btn_select.config(bg=C["btn_bg"]))
+
+        # Drag and drop support for the listbox
+        self._merge_listbox.bind("<ButtonPress-1>", self._merge_drag_start)
+        self._merge_listbox.bind("<B1-Motion>", self._merge_drag_move)
+        self._merge_listbox.bind("<ButtonRelease-1>", self._merge_drag_end)
+        self._merge_drag = {"active": False, "start_idx": None}
+
+    def _merge_add_folder(self):
+        folder = filedialog.askdirectory(title="选择要合并的文件夹")
+        if folder:
+            self._merge_add_folder_path(folder)
+
+    def _merge_add_folder_path(self, folder):
+        if folder and os.path.isdir(folder) and folder not in [f[0] for f in self._merge_folders]:
+            display = os.path.basename(folder) or folder
+            self._merge_folders.append((folder, display))
+            self._merge_listbox.insert(tk.END, display)
+            self._merge_update_output_suggestion()
+
+    def _merge_clear_list(self):
+        self._merge_folders.clear()
+        self._merge_listbox.delete(0, tk.END)
+        self._merge_output_var.set("当前目录")
+
+    def _merge_update_output_suggestion(self):
+        if not self._merge_folders:
+            self._merge_output_var.set("当前目录")
+            return
+        dirs = [os.path.dirname(f[0]) for f in self._merge_folders]
+        if len(set(dirs)) == 1:
+            self._merge_output_var.set(dirs[0])
+        else:
+            self._merge_output_var.set("当前目录")
+
+    def _merge_select_output(self):
+        folder = filedialog.askdirectory(title="选择输出目录")
+        if folder:
+            self._merge_output_var.set(folder)
+
+    def _merge_drag_start(self, event):
+        idx = self._merge_listbox.nearest(event.y)
+        self._merge_drag["active"] = True
+        self._merge_drag["start_idx"] = idx
+
+    def _merge_drag_move(self, event):
+        pass
+
+    def _merge_drag_end(self, event):
+        if not self._merge_drag["active"]:
+            return
+        start_idx = self._merge_drag["start_idx"]
+        end_idx = self._merge_listbox.nearest(event.y)
+        if start_idx is not None and end_idx is not None and start_idx != end_idx:
+            item = self._merge_folders.pop(start_idx)
+            self._merge_folders.insert(end_idx, item)
+            self._merge_listbox.delete(0, tk.END)
+            for _, display in self._merge_folders:
+                self._merge_listbox.insert(tk.END, display)
+            self._merge_listbox.selection_set(end_idx)
+        self._merge_drag["active"] = False
+        self._merge_drag["start_idx"] = None
+
+    def _merge_start(self):
+        if not self._merge_folders:
+            messagebox.showwarning("提示", "请先添加要合并的文件夹")
+            return
+
+        output = self._merge_output_var.get().strip()
+        if not output or output == "当前目录":
+            output = os.path.dirname(self._merge_folders[0][0])
+
+        os.makedirs(output, exist_ok=True)
+
+        copied = 0
+        skipped = 0
+        for folder_path, _ in self._merge_folders:
+            for root, dirs, files in os.walk(folder_path):
+                for fname in files:
+                    src = os.path.join(root, fname)
+                    rel = os.path.relpath(src, folder_path)
+                    dst = os.path.join(output, rel)
+
+                    # Auto-rename if file exists
+                    if os.path.exists(dst):
+                        base, ext = os.path.splitext(dst)
+                        counter = 1
+                        while os.path.exists(f"{base}_{counter}{ext}"):
+                            counter += 1
+                        dst = f"{base}_{counter}{ext}"
+                        skipped += 1
+
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(src, dst)
+                    copied += 1
+
+        messagebox.showinfo("合并完成", f"已合并 {copied} 个文件\n{skipped} 个文件被重命名")
 
     # ---------- 文件解压 Tab ----------
 
@@ -539,13 +694,13 @@ class QuickFolderPanel:
         """创建一行文件夹快捷项"""
         exists = os.path.exists(path)
         display = (os.path.basename(path) or path).strip()
-        if len(display) > 24:
-            display = display[:22] + "…"
+        if len(display) > 20:
+            display = display[:18] + "…"
 
         bg = C["item_bg"]
         fg_path = C["fg"] if exists else C["danger"]
 
-        row = tk.Frame(parent, bg=bg, height=30)
+        row = tk.Frame(parent, bg=bg, height=34)
         row.pack(fill=tk.X, pady=1)
         row.pack_propagate(False)
 
@@ -571,7 +726,7 @@ class QuickFolderPanel:
         # ---- 名称 ----
         name = tk.Label(row, text=display, bg=bg, fg=fg_path,
                         font=("Segoe UI", 9),
-                        anchor=tk.W, width=22)
+                        anchor=tk.W, width=18)
         name.pack(side=tk.LEFT, padx=2)
 
         # ---- 按钮工厂 ----
@@ -593,6 +748,7 @@ class QuickFolderPanel:
         _btn("打开", lambda p=path: self.open_folder(p))
         _btn("关闭", lambda p=path: self.close_folder(p))
         _btn("粘贴", lambda p=path: self.paste_to(p))
+        _btn("删除zip", lambda p=path: self.delete_archives(p), hb=C["danger"])
 
         # 删除
         _del = tk.Button(row, text="🗑",
@@ -906,6 +1062,65 @@ class QuickFolderPanel:
                 msg += f"，{errors} 个失败"
             messagebox.showinfo("完成", msg)
 
+    # ---------- 删除压缩文件 ----------
+
+    def delete_archives(self, path: str):
+        """删除指定文件夹中的所有压缩文件"""
+        if not os.path.exists(path):
+            messagebox.showwarning("提示", f"文件夹不存在:\n{path}")
+            return
+
+        # 支持的压缩格式
+        archive_extensions = {
+            '.zip', '.rar', '.7z', 
+            '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.xz',
+            '.gz', '.bz2', '.xz',
+            '.cab', '.iso', '.dmg',
+        }
+
+        # 扫描压缩文件
+        archives = []
+        try:
+            for root, dirs, files in os.walk(path):
+                for f in files:
+                    if any(f.lower().endswith(ext) for ext in archive_extensions):
+                        archives.append(os.path.join(root, f))
+        except Exception as e:
+            messagebox.showerror("错误", f"扫描文件夹失败:\n{e}")
+            return
+
+        if not archives:
+            messagebox.showinfo("提示", "未找到压缩文件")
+            return
+
+        # 显示确认对话框
+        msg = f"找到 {len(archives)} 个压缩文件，确定要删除吗？\n\n"
+        # 显示前10个文件
+        for i, f in enumerate(archives[:10]):
+            msg += f"• {os.path.basename(f)}\n"
+        if len(archives) > 10:
+            msg += f"... 还有 {len(archives) - 10} 个文件\n"
+        msg += "\n⚠️ 此操作不可恢复！"
+
+        if not messagebox.askyesno("确认删除", msg, icon="warning"):
+            return
+
+        # 执行删除
+        deleted = 0
+        errors = 0
+        for f in archives:
+            try:
+                os.remove(f)
+                deleted += 1
+            except Exception:
+                errors += 1
+
+        # 显示结果
+        result_msg = f"已删除 {deleted} 个压缩文件"
+        if errors:
+            result_msg += f"\n{errors} 个文件删除失败"
+        messagebox.showinfo("完成", result_msg)
+
     # ---------- 分区切换 ----------
 
     def toggle_section(self, path: str):
@@ -926,7 +1141,6 @@ class QuickFolderPanel:
         icon = "📌" if self.topmost else "📍"
         color = C["accent"] if self.topmost else C["gray"]
         self._pin_btn.config(text=icon, fg=color)
-        self._title_lbl.config(text=f"📁 Quick Folder{'  (已取消置顶)' if not self.topmost else ''}")
 
     # ---------- 添加 / 删除 ----------
 
@@ -1128,11 +1342,28 @@ class QuickFolderPanel:
 
     def _process_dropped_files(self, files):
         """在主线程中处理拖入的文件"""
-        # 切换到解压 tab
-        self._show_tab("extract")
-        for f in files:
-            self._extract_add_file(f)
-        self._extract_refresh_list()
+        folders = [f for f in files if os.path.isdir(f)]
+        archive_exts = ('.zip', '.rar', '.7z', '.tar', '.tar.gz', '.tgz', '.tar.bz2')
+        archive_files = [f for f in files if os.path.isfile(f) and f.lower().endswith(archive_exts)]
+
+        if folders:
+            # 有文件夹 → 切换到合并 tab，添加文件夹
+            self._show_tab("merge")
+            for f in folders:
+                self._merge_add_folder_path(f)
+        elif archive_files:
+            # 有压缩文件 → 切换到解压 tab
+            self._show_tab("extract")
+            for f in archive_files:
+                self._extract_add_file(f)
+            self._extract_refresh_list()
+        else:
+            # 普通文件 → 切换到解压 tab
+            self._show_tab("extract")
+            for f in files:
+                if os.path.isfile(f):
+                    self._extract_add_file(f)
+            self._extract_refresh_list()
 
     # ============================================================
     # 文件解压 Tab 方法
@@ -1442,7 +1673,6 @@ class QuickFolderPanel:
         self._tab_buttons = {}
         self._rows.clear()
         self._build_titlebar()
-        self._build_tabbar()
 
         self.tab_container = tk.Frame(self.main, bg=C["bg"])
         self.tab_container.pack(fill=tk.BOTH, expand=True)
@@ -1469,6 +1699,10 @@ class QuickFolderPanel:
             font=("Segoe UI", 10), pady=12,
         )
 
+        # 文件夹合并 tab
+        self.tab_merge = tk.Frame(self.tab_container, bg=C["bg"])
+        self._build_merge_tab()
+
         # 解压 tab
         self.tab_extract = tk.Frame(self.tab_container, bg=C["bg"])
         self._build_extract_tab()
@@ -1478,7 +1712,7 @@ class QuickFolderPanel:
         self._build_settings_tab()
 
         # 注册 tabs
-        self._tabs = {"folder": self.tab_folder, "extract": self.tab_extract, "settings": self.tab_settings}
+        self._tabs = {"folder": self.tab_folder, "merge": self.tab_merge, "extract": self.tab_extract, "settings": self.tab_settings}
         self._active_tab = None
         self._show_tab("folder")
 
@@ -1495,7 +1729,22 @@ class QuickFolderPanel:
         self._win_y = event.y_root - self.root.winfo_y()
 
     def _win_drag_move(self, event):
-        self.root.geometry(f"+{event.x_root - self._win_x}+{event.y_root - self._win_y}")
+        x = event.x_root - self._win_x
+        y = event.y_root - self._win_y
+        if sys.platform == "win32" and hasattr(self, "_hwnd"):
+            try:
+                SWP_NOSIZE = 0x0001
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                SWP_NOREDRAW = 0x0008
+                ctypes.windll.user32.SetWindowPos(
+                    self._hwnd, 0, x, y, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW
+                )
+                return
+            except Exception:
+                pass
+        self.root.geometry(f"+{x}+{y}")
 
     # ============================================================
     # 窗口定位
@@ -1506,7 +1755,7 @@ class QuickFolderPanel:
         sw = self.root.winfo_screenwidth()
         w = min(620, sw - 20)
         x = (sw - w) // 2
-        self.root.geometry(f"{w}x220+{x}+0")
+        self.root.geometry(f"{w}x200+{x}+0")
 
     # ---------- 无边框窗口（但保留任务栏图标） ----------
 

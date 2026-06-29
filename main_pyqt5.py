@@ -251,7 +251,7 @@ class DraggableListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
     def sizeHint(self):
         """根据内容计算建议大小"""
@@ -260,9 +260,12 @@ class DraggableListWidget(QListWidget):
             item = self.item(i)
             widget = self.itemWidget(item)
             if widget:
-                h += widget.sizeHint().height() + 4
-        base = super().sizeHint()
-        return QSize(base.width(), max(base.height(), h))
+                h += 55
+        w = super().sizeHint().width()
+        return QSize(w, max(50, h))
+
+    def minimumSizeHint(self):
+        return QSize(100, 50)
 
 
 class FolderItemWidget(QWidget):
@@ -274,10 +277,9 @@ class FolderItemWidget(QWidget):
         self.display_name = display_name
         self.is_common = is_common
         self.theme = theme
-        self.setFixedHeight(45)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
         # 分区切换图标（⭐ / 📦）
@@ -765,10 +767,15 @@ class QuickFolderPanel(QMainWindow):
         self.pin_btn.setChecked(True)
         self.pin_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: transparent;
-                color: {self.theme['accent']};
+                background-color: {self.theme['tab_inactive']};
+                color: {self.theme['gray']};
                 border: none;
                 font-size: 14px;
+                border-radius: 4px;
+            }}
+            QPushButton:checked {{
+                background-color: {self.theme['tab_active']};
+                color: {self.theme['fg']};
             }}
             QPushButton:hover {{
                 background-color: {self.theme['tab_hover']};
@@ -1142,13 +1149,13 @@ class QuickFolderPanel(QMainWindow):
     def adjust_window_height(self):
         """根据文件夹数量自动调整窗口高度"""
         folder_count = len(self.folders)
-        # 基础高度：标题栏 + tab栏 + 工具栏 + 分区标题 + 间距
-        base_height = 120
-        # 每个文件夹项高度约55（45 widget + 10 spacing）
+        # 基础高度：标题栏(36) + tab栏(36) + 工具栏(36) + 分区标题(30) + 间距(20)
+        base_height = 160
+        # 每个文件夹项高度55
         item_height = 55
         # 最小和最大高度
-        min_height = 300
-        max_height = 600
+        min_height = 250
+        max_height = 700
 
         content_height = base_height + folder_count * item_height
         new_height = max(min_height, min(max_height, content_height))

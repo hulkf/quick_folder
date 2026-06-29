@@ -252,7 +252,7 @@ class DraggableListWidget(QListWidget):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-        self.setMinimumHeight(55)
+        self.setMinimumHeight(45)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self._drop_callback = None
@@ -267,12 +267,12 @@ class DraggableListWidget(QListWidget):
     def sizeHint(self):
         count = self.count()
         if count == 0:
-            return QSize(super().sizeHint().width(), 55)
+            return QSize(super().sizeHint().width(), 45)
         h = count * 55 + 10
         return QSize(super().sizeHint().width(), h)
 
     def minimumSizeHint(self):
-        return QSize(100, 55)
+        return QSize(100, 45)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -342,20 +342,22 @@ class FolderItemWidget(QWidget):
         self._name_label = None
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(4)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(2)
 
         # 左侧固定区域：图标
         self.sec_icon = QLabel("⭐" if is_common else "📦")
         self.sec_icon.setFont(QFont("Segoe UI Emoji", 11))
         self.sec_icon.setCursor(Qt.PointingHandCursor)
-        self.sec_icon.setStyleSheet("background: transparent; padding: 2px;")
+        self.sec_icon.setStyleSheet("background: transparent;")
+        self.sec_icon.setFixedWidth(20)
         self.sec_icon.mousePressEvent = lambda e: self.section_toggled.emit(self.path, self.is_common)
         layout.addWidget(self.sec_icon)
 
         exists = os.path.exists(path)
         folder_icon = QLabel("📂" if exists else "⚠️")
         folder_icon.setFont(QFont("Segoe UI Emoji", 11))
+        folder_icon.setFixedWidth(20)
         layout.addWidget(folder_icon)
 
         # 名称（填充中间空间）
@@ -363,62 +365,46 @@ class FolderItemWidget(QWidget):
         self._name_label.setFont(QFont("Segoe UI", 10))
         self._name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
         self._name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._name_label.setMinimumWidth(30)
         layout.addWidget(self._name_label, 1)
 
         # 右侧固定按钮区域
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(4)
+        btn_style = f"""
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 3px; font-size: 11px; }}
+            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
+        """
 
         open_btn = QPushButton("打开")
-        open_btn.setFixedSize(48, 30)
-        open_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
-            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
-        """)
+        open_btn.setFixedSize(42, 26)
+        open_btn.setStyleSheet(btn_style)
         open_btn.clicked.connect(lambda: self.open_folder())
-        buttons_layout.addWidget(open_btn)
+        layout.addWidget(open_btn)
 
         paste_btn = QPushButton("粘贴")
-        paste_btn.setFixedSize(48, 30)
-        paste_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
-            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
-        """)
+        paste_btn.setFixedSize(42, 26)
+        paste_btn.setStyleSheet(btn_style)
         paste_btn.clicked.connect(lambda: self.paste_to())
-        buttons_layout.addWidget(paste_btn)
+        layout.addWidget(paste_btn)
 
         reorder_btn = QPushButton("重排序")
-        reorder_btn.setFixedSize(65, 30)
-        reorder_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
-            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
-        """)
+        reorder_btn.setFixedSize(52, 26)
+        reorder_btn.setStyleSheet(btn_style)
         reorder_btn.clicked.connect(lambda: self.reorder_files())
-        buttons_layout.addWidget(reorder_btn)
+        layout.addWidget(reorder_btn)
 
         rename_btn = QPushButton("重命名")
-        rename_btn.setFixedSize(65, 30)
-        rename_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
-            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
-        """)
+        rename_btn.setFixedSize(52, 26)
+        rename_btn.setStyleSheet(btn_style)
         rename_btn.clicked.connect(lambda: self.rename_folder())
-        buttons_layout.addWidget(rename_btn)
+        layout.addWidget(rename_btn)
 
         del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(32, 30)
+        del_btn.setFixedSize(26, 26)
         del_btn.setStyleSheet(f"""
-            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 13px; }}
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 3px; font-size: 12px; }}
             QPushButton:hover {{ background-color: {theme['danger']}; color: white; }}
         """)
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
-        buttons_layout.addWidget(del_btn)
-
-        buttons_widget = QWidget()
-        buttons_widget.setLayout(buttons_layout)
-        buttons_widget.setStyleSheet("background: transparent;")
-        layout.addWidget(buttons_widget)
+        layout.addWidget(del_btn)
 
     def open_folder(self):
         """打开文件夹"""
@@ -489,10 +475,14 @@ class FolderItemWidget(QWidget):
         """根据可用宽度更新名称显示"""
         if not self._name_label:
             return
-        # 计算可用宽度：总宽度 - 图标 - 按钮区域 - 边距
-        # 按钮区域固定宽度约 320px
-        available_width = self.width() - 80 - 320
-        available_width = max(30, available_width)
+        # 按钮区域固定宽度：42+42+52+52+26+4*2(spacing) = 224
+        btn_width = 224
+        # 图标区域：20+20+2*2(spacing) = 44
+        icon_width = 44
+        # 边距
+        margins = 8
+        available_width = self.width() - icon_width - btn_width - margins
+        available_width = max(20, available_width)
         metrics = QFontMetrics(self._name_label.font())
         elided = metrics.elidedText(self.display_name, Qt.ElideRight, available_width)
         self._name_label.setText(elided)

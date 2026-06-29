@@ -365,36 +365,6 @@ class FolderItemWidget(QWidget):
         name_label.setMinimumWidth(80)
         layout.addWidget(name_label, 1)
 
-        # 重命名按钮
-        rename_btn = QPushButton("改名")
-        rename_btn.setFixedSize(50, 30)
-        rename_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
-        """)
-        rename_btn.clicked.connect(lambda: self.rename_folder())
-        layout.addWidget(rename_btn)
-
-        # 打开按钮
-        open_btn = QPushButton("打开")
-        open_btn.setFixedSize(50, 30)
-        open_btn.clicked.connect(lambda: self.open_folder())
-        layout.addWidget(open_btn)
-
-        # 粘贴按钮
-        paste_btn = QPushButton("粘贴")
-        paste_btn.setFixedSize(50, 30)
-        paste_btn.clicked.connect(lambda: self.paste_to())
-        layout.addWidget(paste_btn)
-
         # 重排序按钮
         reorder_btn = QPushButton("重排序")
         reorder_btn.setFixedSize(60, 30)
@@ -412,6 +382,24 @@ class FolderItemWidget(QWidget):
         """)
         reorder_btn.clicked.connect(lambda: self.reorder_files())
         layout.addWidget(reorder_btn)
+
+        # 重命名按钮
+        rename_btn = QPushButton("重命名")
+        rename_btn.setFixedSize(60, 30)
+        rename_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['btn_bg']};
+                color: {theme['fg']};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: white;
+            }}
+        """)
+        rename_btn.clicked.connect(lambda: self.rename_folder())
+        layout.addWidget(rename_btn)
 
         # 删除按钮
         del_btn = QPushButton("🗑")
@@ -444,11 +432,11 @@ class FolderItemWidget(QWidget):
             QMessageBox.warning(self, "提示", f"文件夹不存在:\n{self.path}")
 
     def rename_folder(self):
-        """重命名文件夹显示名称"""
+        """重命名文件夹（实际文件夹和显示名称）"""
         from PyQt5.QtWidgets import QInputDialog
         new_name, ok = QInputDialog.getText(
             self, "重命名",
-            "输入新的显示名称:",
+            "输入新名称:",
             text=self.display_name
         )
         if ok and new_name.strip():
@@ -1397,13 +1385,35 @@ class QuickFolderPanel(QMainWindow):
             self.save_config()
 
     def rename_folder(self, path: str, new_name: str):
-        """重命名文件夹显示名称"""
-        for folder in self.folders:
-            if folder["path"] == path:
-                folder["display_name"] = new_name
-                break
-        self.refresh_folder_list()
-        self.save_config()
+        """重命名文件夹（实际文件夹和显示名称）"""
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "提示", f"文件夹不存在:\n{path}")
+            return
+
+        # 构建新的文件夹路径
+        parent_dir = os.path.dirname(path)
+        new_path = os.path.join(parent_dir, new_name)
+
+        # 检查新路径是否已存在
+        if os.path.exists(new_path) and new_path != path:
+            QMessageBox.warning(self, "提示", f"目标路径已存在:\n{new_path}")
+            return
+
+        try:
+            # 重命名实际文件夹
+            os.rename(path, new_path)
+
+            # 更新配置中的路径
+            for folder in self.folders:
+                if folder["path"] == path:
+                    folder["path"] = new_path
+                    folder["display_name"] = new_name
+                    break
+
+            self.refresh_folder_list()
+            self.save_config()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"重命名失败:\n{e}")
 
     def on_folder_reordered(self):
         """文件夹重新排序"""

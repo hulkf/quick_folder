@@ -315,9 +315,9 @@ class FolderItemWidget(QWidget):
         paste_btn.clicked.connect(lambda: self.paste_to())
         layout.addWidget(paste_btn)
 
-        # 排序按钮
-        reorder_btn = QPushButton("排序")
-        reorder_btn.setFixedSize(50, 30)
+        # 重排序按钮
+        reorder_btn = QPushButton("重排序")
+        reorder_btn.setFixedSize(60, 30)
         reorder_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};

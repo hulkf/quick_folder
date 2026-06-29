@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QTabWidget,
     QFileDialog, QMessageBox, QProgressBar, QDialog, QLineEdit,
     QGroupBox, QFrame, QSplitter, QMenu, QAction, QSystemTrayIcon,
-    QStyle, QDesktopWidget, QScrollArea, QSizePolicy
+    QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
@@ -251,21 +251,17 @@ class DraggableListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
     def sizeHint(self):
         """根据内容计算建议大小"""
-        h = 0
-        for i in range(self.count()):
-            item = self.item(i)
-            widget = self.itemWidget(item)
-            if widget:
-                h += 55
-        w = super().sizeHint().width()
-        return QSize(w, max(50, h))
+        count = self.count()
+        h = count * 55 + 10
+        return QSize(super().sizeHint().width(), h)
 
     def minimumSizeHint(self):
-        return QSize(100, 50)
+        count = self.count()
+        h = count * 55 + 10
+        return QSize(100, h)
 
 
 class FolderItemWidget(QWidget):
@@ -645,6 +641,14 @@ class QuickFolderPanel(QMainWindow):
         self.setMinimumSize(400, 300)
         self.setWindowFlags(Qt.WindowStaysOnTopHint)
 
+        # 设置窗口图标
+        icon_path = Path(__file__).parent / "icon.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+        else:
+            # 使用默认图标
+            self.setWindowIcon(QIcon.fromTheme("folder"))
+
         # 加载配置
         self.config = self.load_config()
         self.theme_name = self.config.get("theme", "dark_teal")
@@ -855,9 +859,8 @@ class QuickFolderPanel(QMainWindow):
         layout.addLayout(toolbar)
 
         # 分区：常用
-        common_group = QGroupBox("⭐ 常用")
-        common_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        common_group.setStyleSheet(f"""
+        self.common_group = QGroupBox("⭐ 常用")
+        self.common_group.setStyleSheet(f"""
             QGroupBox {{
                 border: 1px solid {self.theme['border']};
                 border-radius: 4px;
@@ -871,18 +874,18 @@ class QuickFolderPanel(QMainWindow):
                 padding: 0 5px;
             }}
         """)
-        common_layout = QVBoxLayout(common_group)
+        common_layout = QVBoxLayout(self.common_group)
         common_layout.setContentsMargins(4, 4, 4, 4)
+        common_layout.setSpacing(2)
         self.common_list = DraggableListWidget()
         self.common_list.setDragDropMode(QListWidget.InternalMove)
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
         common_layout.addWidget(self.common_list)
-        layout.addWidget(common_group, 1)
+        layout.addWidget(self.common_group)
 
         # 分区：非常用
-        uncommon_group = QGroupBox("📦 非常用")
-        uncommon_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        uncommon_group.setStyleSheet(f"""
+        self.uncommon_group = QGroupBox("📦 非常用")
+        self.uncommon_group.setStyleSheet(f"""
             QGroupBox {{
                 border: 1px solid {self.theme['border']};
                 border-radius: 4px;
@@ -896,13 +899,14 @@ class QuickFolderPanel(QMainWindow):
                 padding: 0 5px;
             }}
         """)
-        uncommon_layout = QVBoxLayout(uncommon_group)
+        uncommon_layout = QVBoxLayout(self.uncommon_group)
         uncommon_layout.setContentsMargins(4, 4, 4, 4)
+        uncommon_layout.setSpacing(2)
         self.uncommon_list = DraggableListWidget()
         self.uncommon_list.setDragDropMode(QListWidget.InternalMove)
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
         uncommon_layout.addWidget(self.uncommon_list)
-        layout.addWidget(uncommon_group, 1)
+        layout.addWidget(self.uncommon_group)
 
         # 空状态提示
         self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")
@@ -1056,14 +1060,23 @@ class QuickFolderPanel(QMainWindow):
 
         # 主题设置
         theme_group = QGroupBox("🎨 主题设置")
-        theme_layout = QVBoxLayout(theme_group)
+        theme_layout = QHBoxLayout(theme_group)
 
+        theme_label = QLabel("选择主题:")
+        theme_label.setStyleSheet(f"color: {self.theme['fg']};")
+        theme_layout.addWidget(theme_label)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.setMinimumHeight(30)
         for key, theme in THEMES.items():
-            btn = QPushButton(theme["name"])
-            btn.setCheckable(True)
-            btn.setChecked(key == self.theme_name)
-            btn.clicked.connect(lambda checked, k=key: self.change_theme(k))
-            theme_layout.addWidget(btn)
+            self.theme_combo.addItem(theme["name"], key)
+        # 设置当前主题
+        for i in range(self.theme_combo.count()):
+            if self.theme_combo.itemData(i) == self.theme_name:
+                self.theme_combo.setCurrentIndex(i)
+                break
+        self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
+        theme_layout.addWidget(self.theme_combo, 1)
 
         layout.addWidget(theme_group)
         layout.addStretch()
@@ -1077,6 +1090,12 @@ class QuickFolderPanel(QMainWindow):
         layout.addWidget(about_group)
 
         return tab
+
+    def on_theme_changed(self, index):
+        """主题下拉框变化"""
+        theme_key = self.theme_combo.itemData(index)
+        if theme_key and theme_key != self.theme_name:
+            self.change_theme(theme_key)
 
     def change_theme(self, theme_name: str):
         """切换主题"""
@@ -1547,6 +1566,14 @@ class QuickFolderPanel(QMainWindow):
 
 
 def main():
+    # Windows 任务栏图标支持
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('com.quickfolder.app')
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("Quick Folder")
 

@@ -260,50 +260,66 @@ class FolderItemWidget(QWidget):
         self.display_name = display_name
         self.is_common = is_common
         self.theme = theme
+        self.setFixedHeight(45)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
-        # 图标
-        icon_label = QLabel("⭐" if is_common else "📦")
-        icon_label.setFont(QFont("Segoe UI Emoji", 10))
-        layout.addWidget(icon_label)
+        # 分区切换图标（⭐ / 📦）
+        self.sec_icon = QLabel("⭐" if is_common else "📦")
+        self.sec_icon.setFont(QFont("Segoe UI Emoji", 11))
+        self.sec_icon.setCursor(Qt.PointingHandCursor)
+        self.sec_icon.setStyleSheet("background: transparent; padding: 2px;")
+        self.sec_icon.mousePressEvent = lambda e: self.toggle_section()
+        layout.addWidget(self.sec_icon)
 
         # 文件夹图标
         exists = os.path.exists(path)
         folder_icon = QLabel("📂" if exists else "⚠️")
-        folder_icon.setFont(QFont("Segoe UI Emoji", 10))
+        folder_icon.setFont(QFont("Segoe UI Emoji", 11))
         layout.addWidget(folder_icon)
 
         # 名称
         name_label = QLabel(display_name)
         name_label.setFont(QFont("Segoe UI", 10))
-        name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']};")
+        name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
+        name_label.setMinimumWidth(100)
         layout.addWidget(name_label, 1)
 
         # 操作按钮
-        btn_frame = QWidget()
-        btn_layout = QHBoxLayout(btn_frame)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(4)
-
         open_btn = QPushButton("打开")
-        open_btn.setFixedSize(50, 28)
+        open_btn.setFixedSize(50, 30)
         open_btn.clicked.connect(lambda: self.open_folder())
-        btn_layout.addWidget(open_btn)
+        layout.addWidget(open_btn)
 
         close_btn = QPushButton("关闭")
-        close_btn.setFixedSize(50, 28)
+        close_btn.setFixedSize(50, 30)
         close_btn.clicked.connect(lambda: self.close_folder())
-        btn_layout.addWidget(close_btn)
+        layout.addWidget(close_btn)
 
         paste_btn = QPushButton("粘贴")
-        paste_btn.setFixedSize(50, 28)
+        paste_btn.setFixedSize(50, 30)
         paste_btn.clicked.connect(lambda: self.paste_to())
-        btn_layout.addWidget(paste_btn)
+        layout.addWidget(paste_btn)
 
-        layout.addWidget(btn_frame)
+        # 删除按钮
+        del_btn = QPushButton("🗑")
+        del_btn.setFixedSize(30, 30)
+        del_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['btn_bg']};
+                color: {theme['fg']};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['danger']};
+                color: white;
+            }}
+        """)
+        del_btn.clicked.connect(lambda: self.parent().parent().parent().remove_folder(self.path))
+        layout.addWidget(del_btn)
 
     def open_folder(self):
         """打开文件夹"""
@@ -363,6 +379,12 @@ class FolderItemWidget(QWidget):
             if errors > 0:
                 msg += f"\n{errors} 个文件复制失败"
             QMessageBox.information(self, "粘贴完成", msg)
+
+    def toggle_section(self):
+        """切换分区"""
+        parent_widget = self.window()
+        if hasattr(parent_widget, 'toggle_section'):
+            parent_widget.toggle_section(self.path, self.is_common)
 
 
 class MergeFolderItemWidget(QWidget):
@@ -668,15 +690,15 @@ class QuickFolderPanel(QMainWindow):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(idx == 0)
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(28)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {self.theme['tab_inactive']};
                     color: {self.theme['gray']};
                     border: none;
-                    padding: 4px 10px;
+                    padding: 4px 12px;
                     border-radius: 4px;
-                    font-size: 11px;
+                    font-size: 13px;
                 }}
                 QPushButton:checked {{
                     background-color: {self.theme['tab_active']};
@@ -1093,7 +1115,7 @@ class QuickFolderPanel(QMainWindow):
             )
 
             item = QListWidgetItem()
-            item.setSizeHint(widget.sizeHint())
+            item.setSizeHint(widget.sizeHint() + QSize(0, 10))
             item.setData(Qt.UserRole, folder)
 
             if folder["is_common"]:
@@ -1119,6 +1141,24 @@ class QuickFolderPanel(QMainWindow):
                 })
                 self.refresh_folder_list()
                 self.save_config()
+
+    def toggle_section(self, path: str, is_current_common: bool):
+        """切换分区（常用/非常用）"""
+        for folder in self.folders:
+            if folder["path"] == path:
+                folder["is_common"] = not is_current_common
+                break
+        self.refresh_folder_list()
+        self.save_config()
+
+    def remove_folder(self, path: str):
+        """删除文件夹"""
+        reply = QMessageBox.question(self, "确认", f"确定要删除这个文件夹吗？\n{path}",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.folders = [f for f in self.folders if f["path"] != path]
+            self.refresh_folder_list()
+            self.save_config()
 
     def on_folder_reordered(self):
         """文件夹重新排序"""

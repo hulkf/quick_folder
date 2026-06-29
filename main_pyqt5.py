@@ -645,14 +645,6 @@ class QuickFolderPanel(QMainWindow):
         layout = QHBoxLayout(title_bar)
         layout.setContentsMargins(8, 0, 8, 0)
 
-        # 图标 + 标题
-        title = QLabel("📁 Quick Folder")
-        title.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        title.setStyleSheet(f"color: {self.theme['fg']};")
-        layout.addWidget(title)
-
-        layout.addSpacing(16)
-
         # Tab 按钮
         self.tab_buttons = []
         tabs = [

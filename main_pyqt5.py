@@ -726,8 +726,12 @@ class QuickFolderPanel(QMainWindow):
         self.setMinimumSize(400, 300)
         self.setWindowFlags(Qt.WindowStaysOnTopHint)
 
-        # 设置窗口图标（使用系统文件夹图标）
-        self.setWindowIcon(QIcon.fromTheme("folder", QIcon(":/qt-project.org/styles/commonstyle/images/directory-open-128.png")))
+        # 设置窗口图标
+        icon_path = Path(__file__).parent / "icon.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+        else:
+            self.setWindowIcon(QIcon.fromTheme("folder"))
 
         # 加载配置
         self.config = self.load_config()
@@ -1809,6 +1813,11 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("Quick Folder")
+
+    # 设置应用程序图标
+    icon_path = Path(__file__).parent / "icon.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # 设置应用程序属性
     app.setQuitOnLastWindowClosed(True)

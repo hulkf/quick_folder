@@ -1040,6 +1040,7 @@ class QuickFolderPanel(QMainWindow):
         output_layout.addWidget(self.merge_output_entry, 1)
 
         select_btn = QPushButton("📂 选择目录")
+        select_btn.setFixedSize(100, 30)
         select_btn.clicked.connect(self.merge_select_output)
         output_layout.addWidget(select_btn)
 

@@ -1031,7 +1031,7 @@ class QuickFolderPanel(QMainWindow):
 
         # 输出目录
         output_layout = QHBoxLayout()
-        output_label = QLabel("输出目录:")
+        output_label = QLabel("输出到:")
         output_label.setStyleSheet(f"color: {self.theme['fg']};")
         output_layout.addWidget(output_label)
 
@@ -1040,15 +1040,21 @@ class QuickFolderPanel(QMainWindow):
         output_layout.addWidget(self.merge_output_entry, 1)
 
         select_btn = QPushButton("📂 选择目录")
-        select_btn.setFixedWidth(100)
         select_btn.clicked.connect(self.merge_select_output)
         output_layout.addWidget(select_btn)
 
         layout.addLayout(output_layout)
 
-        # 开始合并按钮（在选择目录下方，居右对齐）
-        merge_btn_row = QHBoxLayout()
-        merge_btn_row.addStretch()
+        # 选项行：当前文件夹 + 开始合并按钮
+        merge_option_layout = QHBoxLayout()
+
+        self.merge_current_folder_check = QCheckBox("当前文件夹（建立一个合并文件的文件夹）")
+        self.merge_current_folder_check.setChecked(True)
+        self.merge_current_folder_check.setStyleSheet(f"color: {self.theme['fg']};")
+        merge_option_layout.addWidget(self.merge_current_folder_check)
+
+        merge_option_layout.addStretch()
+
         merge_btn = QPushButton("▶ 开始合并")
         merge_btn.setFixedSize(100, 30)
         merge_btn.setStyleSheet(f"""
@@ -1063,8 +1069,9 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         merge_btn.clicked.connect(self.merge_start)
-        merge_btn_row.addWidget(merge_btn)
-        layout.addLayout(merge_btn_row)
+        merge_option_layout.addWidget(merge_btn)
+
+        layout.addLayout(merge_option_layout)
 
         # 进度条
         self.merge_progress = QProgressBar()
@@ -1113,7 +1120,7 @@ class QuickFolderPanel(QMainWindow):
         bottom_layout.addWidget(output_label)
 
         self.extract_output_entry = QLineEdit()
-        self.extract_output_entry.setPlaceholderText("同目录")
+        self.extract_output_entry.setPlaceholderText("当前目录")
         bottom_layout.addWidget(self.extract_output_entry, 1)
 
         select_btn = QPushButton("📂 选择目录")
@@ -1605,13 +1612,22 @@ class QuickFolderPanel(QMainWindow):
 
         output = self.merge_output_entry.text().strip()
         if not output:
-            # 没有指定输出目录，在第一个文件夹的父目录下创建"合并文件"文件夹
-            first_path = self.merge_list.item(0).data(Qt.UserRole)
-            if first_path:
-                parent_dir = os.path.dirname(first_path)
-                output = os.path.join(parent_dir, "合并文件")
+            # 没有指定输出目录
+            if self.merge_current_folder_check.isChecked():
+                # 勾选了"当前文件夹"，在第一个文件夹的父目录下创建"合并文件"文件夹
+                first_path = self.merge_list.item(0).data(Qt.UserRole)
+                if first_path:
+                    parent_dir = os.path.dirname(first_path)
+                    output = os.path.join(parent_dir, "合并文件")
+                else:
+                    output = os.path.join(os.getcwd(), "合并文件")
             else:
-                output = os.path.join(os.getcwd(), "合并文件")
+                # 未勾选，使用第一个文件夹的父目录
+                first_path = self.merge_list.item(0).data(Qt.UserRole)
+                if first_path:
+                    output = os.path.dirname(first_path)
+                else:
+                    output = os.getcwd()
 
         # 确保输出目录存在
         os.makedirs(output, exist_ok=True)

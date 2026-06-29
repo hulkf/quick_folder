@@ -1391,12 +1391,13 @@ class QuickFolderPanel(QMainWindow):
 
         output = self.merge_output_entry.text().strip()
         if not output:
-            # 使用第一个文件夹的父目录
+            # 没有指定输出目录，在第一个文件夹的父目录下创建"合并文件"文件夹
             first_path = self.merge_list.item(0).data(Qt.UserRole)
             if first_path:
-                output = os.path.dirname(first_path)
+                parent_dir = os.path.dirname(first_path)
+                output = os.path.join(parent_dir, "合并文件")
             else:
-                output = os.path.expanduser("~/Desktop")
+                output = os.path.join(os.getcwd(), "合并文件")
 
         # 确保输出目录存在
         os.makedirs(output, exist_ok=True)

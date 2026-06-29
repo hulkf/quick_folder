@@ -267,6 +267,9 @@ class DraggableListWidget(QListWidget):
 
 class FolderItemWidget(QWidget):
     """文件夹项组件"""
+    # 信号：删除请求
+    delete_requested = pyqtSignal(str)
+    section_toggled = pyqtSignal(str, bool)
 
     def __init__(self, path: str, display_name: str, is_common: bool, theme: dict, parent=None):
         super().__init__(parent)
@@ -284,7 +287,7 @@ class FolderItemWidget(QWidget):
         self.sec_icon.setFont(QFont("Segoe UI Emoji", 11))
         self.sec_icon.setCursor(Qt.PointingHandCursor)
         self.sec_icon.setStyleSheet("background: transparent; padding: 2px;")
-        self.sec_icon.mousePressEvent = lambda e: self.toggle_section()
+        self.sec_icon.mousePressEvent = lambda e: self.section_toggled.emit(self.path, self.is_common)
         layout.addWidget(self.sec_icon)
 
         # 文件夹图标
@@ -300,23 +303,19 @@ class FolderItemWidget(QWidget):
         name_label.setMinimumWidth(100)
         layout.addWidget(name_label, 1)
 
-        # 操作按钮
+        # 打开按钮
         open_btn = QPushButton("打开")
         open_btn.setFixedSize(50, 30)
         open_btn.clicked.connect(lambda: self.open_folder())
         layout.addWidget(open_btn)
 
-        close_btn = QPushButton("关闭")
-        close_btn.setFixedSize(50, 30)
-        close_btn.clicked.connect(lambda: self.close_folder())
-        layout.addWidget(close_btn)
-
+        # 粘贴按钮
         paste_btn = QPushButton("粘贴")
         paste_btn.setFixedSize(50, 30)
         paste_btn.clicked.connect(lambda: self.paste_to())
         layout.addWidget(paste_btn)
 
-        # 重排序按钮
+        # 排序按钮
         reorder_btn = QPushButton("排序")
         reorder_btn.setFixedSize(50, 30)
         reorder_btn.setStyleSheet(f"""
@@ -349,7 +348,7 @@ class FolderItemWidget(QWidget):
                 color: white;
             }}
         """)
-        del_btn.clicked.connect(lambda: self.parent().parent().parent().remove_folder(self.path))
+        del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
         layout.addWidget(del_btn)
 
     def open_folder(self):
@@ -1171,6 +1170,9 @@ class QuickFolderPanel(QMainWindow):
                 folder["is_common"],
                 self.theme
             )
+            # 连接信号
+            widget.delete_requested.connect(self.remove_folder)
+            widget.section_toggled.connect(self.toggle_section)
 
             item = QListWidgetItem()
             item.setSizeHint(widget.sizeHint() + QSize(0, 10))

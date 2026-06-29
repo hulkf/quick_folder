@@ -926,7 +926,7 @@ class QuickFolderPanel(QMainWindow):
 
         # 工具栏
         toolbar = QHBoxLayout()
-        add_btn = QPushButton("+ 添加文件夹")
+        add_btn = QPushButton("📁 添加文件夹")
         add_btn.clicked.connect(self.add_folder)
         toolbar.addWidget(add_btn)
         toolbar.addStretch()
@@ -989,7 +989,7 @@ class QuickFolderPanel(QMainWindow):
         layout.addWidget(self.uncommon_group)
 
         # 空状态提示
-        self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")
+        self.empty_label = QLabel("✨ 点击「📁 添加文件夹」按钮添加快捷文件夹")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 14px;")
         layout.addWidget(self.empty_label)

@@ -1028,7 +1028,7 @@ class QuickFolderPanel(QMainWindow):
         self.merge_list.setDragDropMode(QListWidget.InternalMove)
         layout.addWidget(self.merge_list, 1)
 
-        # 输出目录 + 开始合并按钮（同一行）
+        # 输出目录
         output_layout = QHBoxLayout()
         output_label = QLabel("输出目录:")
         output_label.setStyleSheet(f"color: {self.theme['fg']};")
@@ -1042,6 +1042,10 @@ class QuickFolderPanel(QMainWindow):
         select_btn.clicked.connect(self.merge_select_output)
         output_layout.addWidget(select_btn)
 
+        layout.addLayout(output_layout)
+
+        # 开始合并按钮（在选择目录下方）
+        merge_btn_row = QHBoxLayout()
         merge_btn = QPushButton("▶ 开始合并")
         merge_btn.setFixedHeight(30)
         merge_btn.setStyleSheet(f"""
@@ -1057,9 +1061,9 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         merge_btn.clicked.connect(self.merge_start)
-        output_layout.addWidget(merge_btn)
-
-        layout.addLayout(output_layout)
+        merge_btn_row.addStretch()
+        merge_btn_row.addWidget(merge_btn)
+        layout.addLayout(merge_btn_row)
 
         # 进度条
         self.merge_progress = QProgressBar()
@@ -1100,7 +1104,7 @@ class QuickFolderPanel(QMainWindow):
         self.extract_list = QListWidget()
         layout.addWidget(self.extract_list, 1)
 
-        # 底部：输出目录 + 解压按钮（同一行）
+        # 底部：输出目录
         bottom_layout = QHBoxLayout()
 
         output_label = QLabel("解压到:")
@@ -1115,6 +1119,10 @@ class QuickFolderPanel(QMainWindow):
         select_btn.clicked.connect(self.extract_select_output)
         bottom_layout.addWidget(select_btn)
 
+        layout.addLayout(bottom_layout)
+
+        # 开始解压按钮（在选择目录下方）
+        extract_btn_row = QHBoxLayout()
         extract_btn = QPushButton("▶ 开始解压")
         extract_btn.setFixedHeight(30)
         extract_btn.setStyleSheet(f"""
@@ -1130,9 +1138,9 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         extract_btn.clicked.connect(self.extract_start)
-        bottom_layout.addWidget(extract_btn)
-
-        layout.addLayout(bottom_layout)
+        extract_btn_row.addStretch()
+        extract_btn_row.addWidget(extract_btn)
+        layout.addLayout(extract_btn_row)
 
         # 选项行：独立文件夹
         option_layout = QHBoxLayout()

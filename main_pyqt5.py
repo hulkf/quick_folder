@@ -362,12 +362,24 @@ class FolderItemWidget(QWidget):
         name_label = QLabel(display_name)
         name_label.setFont(QFont("Segoe UI", 10))
         name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
-        name_label.setMinimumWidth(80)
+        name_label.setMinimumWidth(60)
         layout.addWidget(name_label, 1)
+
+        # 打开按钮
+        open_btn = QPushButton("打开")
+        open_btn.setFixedSize(45, 28)
+        open_btn.clicked.connect(lambda: self.open_folder())
+        layout.addWidget(open_btn)
+
+        # 粘贴按钮
+        paste_btn = QPushButton("粘贴")
+        paste_btn.setFixedSize(45, 28)
+        paste_btn.clicked.connect(lambda: self.paste_to())
+        layout.addWidget(paste_btn)
 
         # 重排序按钮
         reorder_btn = QPushButton("重排序")
-        reorder_btn.setFixedSize(60, 30)
+        reorder_btn.setFixedSize(55, 28)
         reorder_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};
@@ -385,7 +397,7 @@ class FolderItemWidget(QWidget):
 
         # 重命名按钮
         rename_btn = QPushButton("重命名")
-        rename_btn.setFixedSize(60, 30)
+        rename_btn.setFixedSize(55, 28)
         rename_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};
@@ -403,7 +415,7 @@ class FolderItemWidget(QWidget):
 
         # 删除按钮
         del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(30, 30)
+        del_btn.setFixedSize(28, 28)
         del_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};

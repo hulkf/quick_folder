@@ -883,6 +883,7 @@ class QuickFolderPanel(QMainWindow):
                     padding: 4px 12px;
                     border-radius: 4px;
                     font-size: 13px;
+                    font-weight: bold;
                 }}
                 QPushButton:checked {{
                     background-color: {self.theme['tab_active']};
@@ -1152,21 +1153,6 @@ class QuickFolderPanel(QMainWindow):
         extract_btn.clicked.connect(self.extract_start)
         option_layout.addWidget(extract_btn)
 
-        layout.addLayout(option_layout)
-
-        # 选项行：独立文件夹
-        option_layout = QHBoxLayout()
-
-        self.extract_separate_check = QCheckBox("独立文件夹")
-        self.extract_separate_check.setChecked(False)
-        self.extract_separate_check.setStyleSheet(f"color: {self.theme['fg']};")
-        option_layout.addWidget(self.extract_separate_check)
-
-        hint_label = QLabel("（每个压缩包解压到对应名称文件夹）")
-        hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
-        option_layout.addWidget(hint_label)
-
-        option_layout.addStretch()
         layout.addLayout(option_layout)
 
         # 进度条

@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QTabWidget,
     QFileDialog, QMessageBox, QProgressBar, QDialog, QLineEdit,
     QGroupBox, QFrame, QSplitter, QMenu, QAction, QSystemTrayIcon,
-    QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox
+    QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox, QCheckBox
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
@@ -1029,21 +1029,40 @@ class QuickFolderPanel(QMainWindow):
         select_btn.clicked.connect(self.extract_select_output)
         bottom_layout.addWidget(select_btn)
 
+        layout.addLayout(bottom_layout)
+
+        # 选项行
+        option_layout = QHBoxLayout()
+
+        # 独立文件夹选项
+        self.extract_separate_check = QCheckBox("独立文件夹（每个压缩包解压到对应名称文件夹）")
+        self.extract_separate_check.setChecked(False)
+        self.extract_separate_check.setStyleSheet(f"color: {self.theme['fg']};")
+        option_layout.addWidget(self.extract_separate_check)
+
+        option_layout.addStretch()
+        layout.addLayout(option_layout)
+
+        # 解压按钮
+        extract_btn_row = QHBoxLayout()
         extract_btn = QPushButton("▶ 开始解压")
+        extract_btn.setMinimumHeight(32)
         extract_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme['accent']};
                 color: white;
                 font-weight: bold;
+                border-radius: 4px;
+                padding: 8px 20px;
             }}
             QPushButton:hover {{
                 background-color: {self.theme['accent_hover']};
             }}
         """)
         extract_btn.clicked.connect(self.extract_start)
-        bottom_layout.addWidget(extract_btn)
-
-        layout.addLayout(bottom_layout)
+        extract_btn_row.addWidget(extract_btn)
+        extract_btn_row.addStretch()
+        layout.addLayout(extract_btn_row)
 
         # 进度条
         self.extract_progress = QProgressBar()
@@ -1480,6 +1499,9 @@ class QuickFolderPanel(QMainWindow):
             QMessageBox.warning(self, "提示", "没有有效的文件可解压")
             return
 
+        # 检查是否启用独立文件夹
+        separate_mode = self.extract_separate_check.isChecked()
+
         # 显示进度条
         self.extract_progress.setVisible(True)
         self.extract_progress.setMaximum(len(files))
@@ -1490,7 +1512,16 @@ class QuickFolderPanel(QMainWindow):
         errors = 0
         for i, file_path in enumerate(files):
             try:
-                self.do_extract(file_path, output)
+                if separate_mode:
+                    # 独立文件夹模式：创建以压缩包名称命名的文件夹
+                    base_name = os.path.splitext(os.path.basename(file_path))[0]
+                    extract_dir = os.path.join(output, base_name)
+                    os.makedirs(extract_dir, exist_ok=True)
+                else:
+                    # 普通模式：解压到输出目录
+                    extract_dir = output
+
+                self.do_extract(file_path, extract_dir)
                 success += 1
             except Exception as e:
                 errors += 1

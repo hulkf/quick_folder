@@ -339,10 +339,17 @@ class FolderItemWidget(QWidget):
         self.display_name = display_name
         self.is_common = is_common
         self.theme = theme
+        self._selected = False
+        self._normal_bg = theme['item_bg']
+        self._selected_bg = theme['item_hover']
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
+
+        # 左侧固定区域：图标和名称
+        left_layout = QHBoxLayout()
+        left_layout.setSpacing(4)
 
         # 分区切换图标（⭐ / 📦）
         self.sec_icon = QLabel("⭐" if is_common else "📦")
@@ -350,70 +357,64 @@ class FolderItemWidget(QWidget):
         self.sec_icon.setCursor(Qt.PointingHandCursor)
         self.sec_icon.setStyleSheet("background: transparent; padding: 2px;")
         self.sec_icon.mousePressEvent = lambda e: self.section_toggled.emit(self.path, self.is_common)
-        layout.addWidget(self.sec_icon)
+        left_layout.addWidget(self.sec_icon)
 
         # 文件夹图标
         exists = os.path.exists(path)
         folder_icon = QLabel("📂" if exists else "⚠️")
         folder_icon.setFont(QFont("Segoe UI Emoji", 11))
-        layout.addWidget(folder_icon)
+        left_layout.addWidget(folder_icon)
 
         # 名称
         name_label = QLabel(display_name)
         name_label.setFont(QFont("Segoe UI", 10))
         name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
         name_label.setMinimumWidth(100)
-        layout.addWidget(name_label, 1)
+        left_layout.addWidget(name_label, 1)
 
-        # 打开按钮
+        left_widget = QWidget()
+        left_widget.setLayout(left_layout)
+        left_widget.setStyleSheet("background: transparent;")
+        layout.addWidget(left_widget, 1)
+
+        # 右侧固定按钮区域
+        btn_style = f"""
+            QPushButton {{
+                background-color: {theme['btn_bg']};
+                color: {theme['fg']};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: white;
+            }}
+        """
+
         open_btn = QPushButton("打开")
         open_btn.setFixedSize(50, 30)
+        open_btn.setStyleSheet(btn_style)
         open_btn.clicked.connect(lambda: self.open_folder())
         layout.addWidget(open_btn)
 
-        # 粘贴按钮
         paste_btn = QPushButton("粘贴")
         paste_btn.setFixedSize(50, 30)
+        paste_btn.setStyleSheet(btn_style)
         paste_btn.clicked.connect(lambda: self.paste_to())
         layout.addWidget(paste_btn)
 
-        # 重排序按钮
         reorder_btn = QPushButton("重排序")
         reorder_btn.setFixedSize(65, 30)
-        reorder_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
-        """)
+        reorder_btn.setStyleSheet(btn_style)
         reorder_btn.clicked.connect(lambda: self.reorder_files())
         layout.addWidget(reorder_btn)
 
-        # 重命名按钮
         rename_btn = QPushButton("重命名")
         rename_btn.setFixedSize(65, 30)
-        rename_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
-        """)
+        rename_btn.setStyleSheet(btn_style)
         rename_btn.clicked.connect(lambda: self.rename_folder())
         layout.addWidget(rename_btn)
 
-        # 删除按钮
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(34, 30)
         del_btn.setStyleSheet(f"""
@@ -431,6 +432,14 @@ class FolderItemWidget(QWidget):
         """)
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
         layout.addWidget(del_btn)
+
+    def mousePressEvent(self, event):
+        """点击行切换选中状态"""
+        if event.button() == Qt.LeftButton:
+            self._selected = not self._selected
+            bg = self._selected_bg if self._selected else self._normal_bg
+            self.setStyleSheet(f"background-color: {bg}; border-radius: 4px;")
+        super().mousePressEvent(event)
 
     def open_folder(self):
         """打开文件夹"""

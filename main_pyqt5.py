@@ -251,16 +251,16 @@ class DraggableListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._item_height = 55
 
     def sizeHint(self):
-        """根据内容计算建议大小"""
         count = self.count()
-        h = count * 55 + 10
+        h = max(50, count * self._item_height + 10)
         return QSize(super().sizeHint().width(), h)
 
     def minimumSizeHint(self):
         count = self.count()
-        h = count * 55 + 10
+        h = max(50, count * self._item_height + 10)
         return QSize(100, h)
 
 
@@ -641,13 +641,8 @@ class QuickFolderPanel(QMainWindow):
         self.setMinimumSize(400, 300)
         self.setWindowFlags(Qt.WindowStaysOnTopHint)
 
-        # 设置窗口图标
-        icon_path = Path(__file__).parent / "icon.ico"
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
-        else:
-            # 使用默认图标
-            self.setWindowIcon(QIcon.fromTheme("folder"))
+        # 设置窗口图标（使用系统文件夹图标）
+        self.setWindowIcon(QIcon.fromTheme("folder", QIcon(":/qt-project.org/styles/commonstyle/images/directory-open-128.png")))
 
         # 加载配置
         self.config = self.load_config()
@@ -848,7 +843,7 @@ class QuickFolderPanel(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setSpacing(4)
 
         # 工具栏
         toolbar = QHBoxLayout()
@@ -857,6 +852,17 @@ class QuickFolderPanel(QMainWindow):
         toolbar.addWidget(add_btn)
         toolbar.addStretch()
         layout.addLayout(toolbar)
+
+        # 可滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(8)
 
         # 分区：常用
         self.common_group = QGroupBox("⭐ 常用")
@@ -881,7 +887,7 @@ class QuickFolderPanel(QMainWindow):
         self.common_list.setDragDropMode(QListWidget.InternalMove)
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
         common_layout.addWidget(self.common_list)
-        layout.addWidget(self.common_group)
+        scroll_layout.addWidget(self.common_group)
 
         # 分区：非常用
         self.uncommon_group = QGroupBox("📦 非常用")
@@ -906,7 +912,11 @@ class QuickFolderPanel(QMainWindow):
         self.uncommon_list.setDragDropMode(QListWidget.InternalMove)
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
         uncommon_layout.addWidget(self.uncommon_list)
-        layout.addWidget(self.uncommon_group)
+        scroll_layout.addWidget(self.uncommon_group)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll, 1)
 
         # 空状态提示
         self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")
@@ -1031,38 +1041,41 @@ class QuickFolderPanel(QMainWindow):
 
         layout.addLayout(bottom_layout)
 
-        # 选项行
+        # 选项行：独立文件夹 + 解压按钮
         option_layout = QHBoxLayout()
 
         # 独立文件夹选项
-        self.extract_separate_check = QCheckBox("独立文件夹（每个压缩包解压到对应名称文件夹）")
+        self.extract_separate_check = QCheckBox("独立文件夹")
         self.extract_separate_check.setChecked(False)
         self.extract_separate_check.setStyleSheet(f"color: {self.theme['fg']};")
         option_layout.addWidget(self.extract_separate_check)
 
+        # 提示文字
+        hint_label = QLabel("（每个压缩包解压到对应名称文件夹）")
+        hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        option_layout.addWidget(hint_label)
+
         option_layout.addStretch()
-        layout.addLayout(option_layout)
 
         # 解压按钮
-        extract_btn_row = QHBoxLayout()
         extract_btn = QPushButton("▶ 开始解压")
-        extract_btn.setMinimumHeight(32)
+        extract_btn.setMinimumHeight(30)
         extract_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme['accent']};
                 color: white;
                 font-weight: bold;
                 border-radius: 4px;
-                padding: 8px 20px;
+                padding: 6px 16px;
             }}
             QPushButton:hover {{
                 background-color: {self.theme['accent_hover']};
             }}
         """)
         extract_btn.clicked.connect(self.extract_start)
-        extract_btn_row.addWidget(extract_btn)
-        extract_btn_row.addStretch()
-        layout.addLayout(extract_btn_row)
+        option_layout.addWidget(extract_btn)
+
+        layout.addLayout(option_layout)
 
         # 进度条
         self.extract_progress = QProgressBar()

@@ -251,6 +251,7 @@ class DraggableListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def sizeHint(self):
         """根据内容计算建议大小"""
@@ -823,11 +824,20 @@ class QuickFolderPanel(QMainWindow):
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint)
         self.show()
 
+    def switch_tab(self, index: int):
+        """切换标签页"""
+        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.settings_tab]
+        for i, tab in enumerate(tabs):
+            tab.setVisible(i == index)
+        for i, btn in enumerate(self.tab_buttons):
+            btn.setChecked(i == index)
+
     def create_folder_tab(self) -> QWidget:
         """创建快捷文件夹标签页"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         # 工具栏
         toolbar = QHBoxLayout()
@@ -839,6 +849,7 @@ class QuickFolderPanel(QMainWindow):
 
         # 分区：常用
         common_group = QGroupBox("⭐ 常用")
+        common_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         common_group.setStyleSheet(f"""
             QGroupBox {{
                 border: 1px solid {self.theme['border']};
@@ -854,14 +865,16 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         common_layout = QVBoxLayout(common_group)
+        common_layout.setContentsMargins(4, 4, 4, 4)
         self.common_list = DraggableListWidget()
         self.common_list.setDragDropMode(QListWidget.InternalMove)
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
         common_layout.addWidget(self.common_list)
-        layout.addWidget(common_group)
+        layout.addWidget(common_group, 1)
 
         # 分区：非常用
         uncommon_group = QGroupBox("📦 非常用")
+        uncommon_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         uncommon_group.setStyleSheet(f"""
             QGroupBox {{
                 border: 1px solid {self.theme['border']};
@@ -877,11 +890,12 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         uncommon_layout = QVBoxLayout(uncommon_group)
+        uncommon_layout.setContentsMargins(4, 4, 4, 4)
         self.uncommon_list = DraggableListWidget()
         self.uncommon_list.setDragDropMode(QListWidget.InternalMove)
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
         uncommon_layout.addWidget(self.uncommon_list)
-        layout.addWidget(uncommon_group)
+        layout.addWidget(uncommon_group, 1)
 
         # 空状态提示
         self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")

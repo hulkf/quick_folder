@@ -316,6 +316,24 @@ class FolderItemWidget(QWidget):
         paste_btn.clicked.connect(lambda: self.paste_to())
         layout.addWidget(paste_btn)
 
+        # 重排序按钮
+        reorder_btn = QPushButton("排序")
+        reorder_btn.setFixedSize(50, 30)
+        reorder_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['btn_bg']};
+                color: {theme['fg']};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: white;
+            }}
+        """)
+        reorder_btn.clicked.connect(lambda: self.reorder_files())
+        layout.addWidget(reorder_btn)
+
         # 删除按钮
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(30, 30)
@@ -398,6 +416,61 @@ class FolderItemWidget(QWidget):
         parent_widget = self.window()
         if hasattr(parent_widget, 'toggle_section'):
             parent_widget.toggle_section(self.path, self.is_common)
+
+    def reorder_files(self):
+        """重命名排序文件夹内的文件"""
+        if not os.path.exists(self.path):
+            QMessageBox.warning(self, "提示", f"文件夹不存在:\n{self.path}")
+            return
+
+        # 获取所有文件
+        files = []
+        for f in os.listdir(self.path):
+            full_path = os.path.join(self.path, f)
+            if os.path.isfile(full_path):
+                files.append(f)
+
+        if not files:
+            QMessageBox.information(self, "提示", "文件夹内没有文件")
+            return
+
+        # 确认对话框
+        reply = QMessageBox.question(
+            self, "确认重排序",
+            f"将对 {len(files)} 个文件按名称排序并重命名为 01, 02, 03...\n\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # 按文件名排序
+        files.sort()
+
+        # 重命名
+        renamed = 0
+        errors = 0
+        for i, old_name in enumerate(files, 1):
+            try:
+                old_path = os.path.join(self.path, old_name)
+                ext = os.path.splitext(old_name)[1]
+                new_name = f"{i:02d}{ext}"
+                new_path = os.path.join(self.path, new_name)
+
+                # 如果新文件名已存在，跳过
+                if os.path.exists(new_path) and old_path != new_path:
+                    continue
+
+                os.rename(old_path, new_path)
+                renamed += 1
+            except Exception as e:
+                errors += 1
+                print(f"重命名失败: {old_name} -> {e}")
+
+        msg = f"已重命名 {renamed} 个文件"
+        if errors > 0:
+            msg += f"\n{errors} 个文件重命名失败"
+        QMessageBox.information(self, "完成", msg)
 
 
 class MergeFolderItemWidget(QWidget):

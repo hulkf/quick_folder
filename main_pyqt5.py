@@ -242,7 +242,7 @@ def generate_stylesheet(theme: dict) -> str:
 
 
 class DraggableListWidget(QListWidget):
-    """支持拖拽排序的列表控件，无滚动条，自动扩展"""
+    """支持拖拽排序的列表控件，无滚动条"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -251,17 +251,6 @@ class DraggableListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._item_height = 55
-
-    def sizeHint(self):
-        count = self.count()
-        h = max(50, count * self._item_height + 10)
-        return QSize(super().sizeHint().width(), h)
-
-    def minimumSizeHint(self):
-        count = self.count()
-        h = max(50, count * self._item_height + 10)
-        return QSize(100, h)
 
 
 class FolderItemWidget(QWidget):
@@ -853,17 +842,6 @@ class QuickFolderPanel(QMainWindow):
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
-        # 可滚动区域
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_layout.setSpacing(8)
-
         # 分区：常用
         self.common_group = QGroupBox("⭐ 常用")
         self.common_group.setStyleSheet(f"""
@@ -887,7 +865,7 @@ class QuickFolderPanel(QMainWindow):
         self.common_list.setDragDropMode(QListWidget.InternalMove)
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
         common_layout.addWidget(self.common_list)
-        scroll_layout.addWidget(self.common_group)
+        layout.addWidget(self.common_group)
 
         # 分区：非常用
         self.uncommon_group = QGroupBox("📦 非常用")
@@ -912,16 +890,9 @@ class QuickFolderPanel(QMainWindow):
         self.uncommon_list.setDragDropMode(QListWidget.InternalMove)
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
         uncommon_layout.addWidget(self.uncommon_list)
-        scroll_layout.addWidget(self.uncommon_group)
+        layout.addWidget(self.uncommon_group)
 
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll, 1)
-
-        # 空状态提示
-        self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")
-        self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 14px;")
+        return tab
         layout.addWidget(self.empty_label)
 
         return tab
@@ -1199,16 +1170,21 @@ class QuickFolderPanel(QMainWindow):
 
     def adjust_window_height(self):
         """根据文件夹数量自动调整窗口高度"""
-        folder_count = len(self.folders)
-        # 基础高度：标题栏(36) + tab栏(36) + 工具栏(36) + 分区标题(30) + 间距(20)
-        base_height = 160
+        # 分别计算常用和非常用文件夹数量
+        common_count = sum(1 for f in self.folders if f["is_common"])
+        uncommon_count = sum(1 for f in self.folders if not f["is_common"])
+
+        # 基础高度：标题栏(36) + tab栏(36) + 工具栏(36) + 间距(20)
+        base_height = 130
+        # 每个分区标题高度30
+        section_height = 30
         # 每个文件夹项高度55
         item_height = 55
         # 最小和最大高度
         min_height = 250
         max_height = 700
 
-        content_height = base_height + folder_count * item_height
+        content_height = base_height + section_height * 2 + (common_count + uncommon_count) * item_height
         new_height = max(min_height, min(max_height, content_height))
 
         # 保持窗口位置不变，只调整高度

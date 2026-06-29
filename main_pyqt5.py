@@ -1039,6 +1039,7 @@ class QuickFolderPanel(QMainWindow):
         output_layout.addWidget(self.merge_output_entry, 1)
 
         select_btn = QPushButton("📂 选择目录")
+        select_btn.setFixedWidth(100)
         select_btn.clicked.connect(self.merge_select_output)
         output_layout.addWidget(select_btn)
 
@@ -1048,14 +1049,13 @@ class QuickFolderPanel(QMainWindow):
         merge_btn_row = QHBoxLayout()
         merge_btn_row.addStretch()
         merge_btn = QPushButton("▶ 开始合并")
-        merge_btn.setFixedHeight(30)
+        merge_btn.setFixedSize(100, 30)
         merge_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme['accent']};
                 color: white;
                 font-weight: bold;
                 border-radius: 4px;
-                padding: 6px 20px;
             }}
             QPushButton:hover {{
                 background-color: {self.theme['accent_hover']};
@@ -1116,31 +1116,43 @@ class QuickFolderPanel(QMainWindow):
         bottom_layout.addWidget(self.extract_output_entry, 1)
 
         select_btn = QPushButton("📂 选择目录")
+        select_btn.setFixedWidth(100)
         select_btn.clicked.connect(self.extract_select_output)
         bottom_layout.addWidget(select_btn)
 
         layout.addLayout(bottom_layout)
 
-        # 开始解压按钮（在选择目录下方，居右对齐）
-        extract_btn_row = QHBoxLayout()
-        extract_btn_row.addStretch()
+        # 选项行：独立文件夹 + 开始解压按钮（同一行）
+        option_layout = QHBoxLayout()
+
+        self.extract_separate_check = QCheckBox("独立文件夹")
+        self.extract_separate_check.setChecked(False)
+        self.extract_separate_check.setStyleSheet(f"color: {self.theme['fg']};")
+        option_layout.addWidget(self.extract_separate_check)
+
+        hint_label = QLabel("（每个压缩包解压到对应名称文件夹）")
+        hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        option_layout.addWidget(hint_label)
+
+        option_layout.addStretch()
+
         extract_btn = QPushButton("▶ 开始解压")
-        extract_btn.setFixedHeight(30)
+        extract_btn.setFixedSize(100, 30)
         extract_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme['accent']};
                 color: white;
                 font-weight: bold;
                 border-radius: 4px;
-                padding: 6px 20px;
             }}
             QPushButton:hover {{
                 background-color: {self.theme['accent_hover']};
             }}
         """)
         extract_btn.clicked.connect(self.extract_start)
-        extract_btn_row.addWidget(extract_btn)
-        layout.addLayout(extract_btn_row)
+        option_layout.addWidget(extract_btn)
+
+        layout.addLayout(option_layout)
 
         # 选项行：独立文件夹
         option_layout = QHBoxLayout()

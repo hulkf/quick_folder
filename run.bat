@@ -5,14 +5,14 @@ set "LOG=%APP_DIR%startup.log"
 echo [%DATE% %TIME%] Starting Quick Folder... > "%LOG%"
 
 REM Try pythonw first (no console), fall back to python
-pythonw "%APP_DIR%main.py" >> "%LOG%" 2>&1
+pythonw "%APP_DIR%main_pyqt5.py" >> "%LOG%" 2>&1
 if %errorlevel% equ 0 (
     echo Started successfully with pythonw >> "%LOG%"
     exit /b
 )
 
 echo pythonw failed, trying python... >> "%LOG%"
-python "%APP_DIR%main.py" >> "%LOG%" 2>&1
+python "%APP_DIR%main_pyqt5.py" >> "%LOG%" 2>&1
 if %errorlevel% equ 0 (
     echo Started successfully with python >> "%LOG%"
     exit /b

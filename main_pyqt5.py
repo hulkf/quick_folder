@@ -379,13 +379,14 @@ class FolderItemWidget(QWidget):
 
         # 重排序按钮
         reorder_btn = QPushButton("重排序")
-        reorder_btn.setFixedSize(55, 28)
+        reorder_btn.setFixedSize(65, 28)
         reorder_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};
                 color: {theme['fg']};
                 border: none;
                 border-radius: 4px;
+                font-size: 11px;
             }}
             QPushButton:hover {{
                 background-color: {theme['accent']};
@@ -397,13 +398,14 @@ class FolderItemWidget(QWidget):
 
         # 重命名按钮
         rename_btn = QPushButton("重命名")
-        rename_btn.setFixedSize(55, 28)
+        rename_btn.setFixedSize(65, 28)
         rename_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};
                 color: {theme['fg']};
                 border: none;
                 border-radius: 4px;
+                font-size: 11px;
             }}
             QPushButton:hover {{
                 background-color: {theme['accent']};
@@ -415,7 +417,7 @@ class FolderItemWidget(QWidget):
 
         # 删除按钮
         del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(28, 28)
+        del_btn.setFixedSize(32, 28)
         del_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};

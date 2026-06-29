@@ -347,37 +347,26 @@ class FolderItemWidget(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
-        # 左侧固定区域：图标和名称
-        left_layout = QHBoxLayout()
-        left_layout.setSpacing(4)
-
-        # 分区切换图标（⭐ / 📦）
+        # 左侧：图标和名称
         self.sec_icon = QLabel("⭐" if is_common else "📦")
         self.sec_icon.setFont(QFont("Segoe UI Emoji", 11))
         self.sec_icon.setCursor(Qt.PointingHandCursor)
         self.sec_icon.setStyleSheet("background: transparent; padding: 2px;")
         self.sec_icon.mousePressEvent = lambda e: self.section_toggled.emit(self.path, self.is_common)
-        left_layout.addWidget(self.sec_icon)
+        layout.addWidget(self.sec_icon)
 
-        # 文件夹图标
         exists = os.path.exists(path)
         folder_icon = QLabel("📂" if exists else "⚠️")
         folder_icon.setFont(QFont("Segoe UI Emoji", 11))
-        left_layout.addWidget(folder_icon)
+        layout.addWidget(folder_icon)
 
-        # 名称
         name_label = QLabel(display_name)
         name_label.setFont(QFont("Segoe UI", 10))
         name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
         name_label.setMinimumWidth(100)
-        left_layout.addWidget(name_label, 1)
+        layout.addWidget(name_label, 1)
 
-        left_widget = QWidget()
-        left_widget.setLayout(left_layout)
-        left_widget.setStyleSheet("background: transparent;")
-        layout.addWidget(left_widget, 1)
-
-        # 右侧固定按钮区域
+        # 右侧：按钮
         btn_style = f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};

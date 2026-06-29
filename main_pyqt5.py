@@ -339,12 +339,13 @@ class FolderItemWidget(QWidget):
         self.display_name = display_name
         self.is_common = is_common
         self.theme = theme
+        self._name_label = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
-        # 分区切换图标（⭐ / 📦）
+        # 左侧固定区域：图标
         self.sec_icon = QLabel("⭐" if is_common else "📦")
         self.sec_icon.setFont(QFont("Segoe UI Emoji", 11))
         self.sec_icon.setCursor(Qt.PointingHandCursor)
@@ -352,120 +353,72 @@ class FolderItemWidget(QWidget):
         self.sec_icon.mousePressEvent = lambda e: self.section_toggled.emit(self.path, self.is_common)
         layout.addWidget(self.sec_icon)
 
-        # 文件夹图标
         exists = os.path.exists(path)
         folder_icon = QLabel("📂" if exists else "⚠️")
         folder_icon.setFont(QFont("Segoe UI Emoji", 11))
         layout.addWidget(folder_icon)
 
-        # 名称
-        name_label = QLabel(display_name)
-        name_label.setFont(QFont("Segoe UI", 10))
-        name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
-        name_label.setMinimumWidth(40)
-        name_label.setMaximumWidth(200)
-        name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        # 截断过长文件名
-        metrics = QFontMetrics(name_label.font())
-        elided_name = metrics.elidedText(display_name, Qt.ElideRight, name_label.maximumWidth())
-        name_label.setText(elided_name)
-        name_label.setToolTip(display_name)
-        layout.addWidget(name_label, 1)
+        # 名称（填充中间空间）
+        self._name_label = QLabel(display_name)
+        self._name_label.setFont(QFont("Segoe UI", 10))
+        self._name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
+        self._name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._name_label.setMinimumWidth(30)
+        layout.addWidget(self._name_label, 1)
 
-        # 打开按钮
+        # 右侧固定按钮区域
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(4)
+
         open_btn = QPushButton("打开")
         open_btn.setFixedSize(48, 30)
         open_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
+            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
         """)
         open_btn.clicked.connect(lambda: self.open_folder())
-        layout.addWidget(open_btn)
+        buttons_layout.addWidget(open_btn)
 
-        # 粘贴按钮
         paste_btn = QPushButton("粘贴")
         paste_btn.setFixedSize(48, 30)
         paste_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
+            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
         """)
         paste_btn.clicked.connect(lambda: self.paste_to())
-        layout.addWidget(paste_btn)
+        buttons_layout.addWidget(paste_btn)
 
-        # 重排序按钮
         reorder_btn = QPushButton("重排序")
         reorder_btn.setFixedSize(65, 30)
         reorder_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
+            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
         """)
         reorder_btn.clicked.connect(lambda: self.reorder_files())
-        layout.addWidget(reorder_btn)
+        buttons_layout.addWidget(reorder_btn)
 
-        # 重命名按钮
         rename_btn = QPushButton("重命名")
         rename_btn.setFixedSize(65, 30)
         rename_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 12px; }}
+            QPushButton:hover {{ background-color: {theme['accent']}; color: white; }}
         """)
         rename_btn.clicked.connect(lambda: self.rename_folder())
-        layout.addWidget(rename_btn)
+        buttons_layout.addWidget(rename_btn)
 
-        # 删除按钮
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(32, 30)
         del_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['danger']};
-                color: white;
-            }}
+            QPushButton {{ background-color: {theme['btn_bg']}; color: {theme['fg']}; border: none; border-radius: 4px; font-size: 13px; }}
+            QPushButton:hover {{ background-color: {theme['danger']}; color: white; }}
         """)
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
-        layout.addWidget(del_btn)
+        buttons_layout.addWidget(del_btn)
+
+        buttons_widget = QWidget()
+        buttons_widget.setLayout(buttons_layout)
+        buttons_widget.setStyleSheet("background: transparent;")
+        layout.addWidget(buttons_widget)
 
     def open_folder(self):
         """打开文件夹"""
@@ -526,6 +479,24 @@ class FolderItemWidget(QWidget):
             if errors > 0:
                 msg += f"\n{errors} 个文件复制失败"
             QMessageBox.information(self, "粘贴完成", msg)
+
+    def resizeEvent(self, event):
+        """窗口大小变化时更新名称显示"""
+        super().resizeEvent(event)
+        self._update_name_display()
+
+    def _update_name_display(self):
+        """根据可用宽度更新名称显示"""
+        if not self._name_label:
+            return
+        # 计算可用宽度：总宽度 - 图标 - 按钮区域 - 边距
+        # 按钮区域固定宽度约 320px
+        available_width = self.width() - 80 - 320
+        available_width = max(30, available_width)
+        metrics = QFontMetrics(self._name_label.font())
+        elided = metrics.elidedText(self.display_name, Qt.ElideRight, available_width)
+        self._name_label.setText(elided)
+        self._name_label.setToolTip(self.display_name)
 
     def reorder_files(self):
         """重命名排序文件夹内的文件"""
@@ -1297,6 +1268,9 @@ class QuickFolderPanel(QMainWindow):
             else:
                 self.uncommon_list.addItem(item)
                 self.uncommon_list.setItemWidget(item, widget)
+
+            # 延迟更新名称显示，确保widget已布局
+            QTimer.singleShot(10, lambda w=widget: w._update_name_display())
 
         self.empty_label.setVisible(len(self.folders) == 0)
 

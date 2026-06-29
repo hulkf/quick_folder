@@ -270,6 +270,7 @@ class FolderItemWidget(QWidget):
     # 信号：删除请求
     delete_requested = pyqtSignal(str)
     section_toggled = pyqtSignal(str, bool)
+    rename_requested = pyqtSignal(str, str)
 
     def __init__(self, path: str, display_name: str, is_common: bool, theme: dict, parent=None):
         super().__init__(parent)
@@ -300,8 +301,26 @@ class FolderItemWidget(QWidget):
         name_label = QLabel(display_name)
         name_label.setFont(QFont("Segoe UI", 10))
         name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
-        name_label.setMinimumWidth(100)
+        name_label.setMinimumWidth(80)
         layout.addWidget(name_label, 1)
+
+        # 重命名按钮
+        rename_btn = QPushButton("改名")
+        rename_btn.setFixedSize(50, 30)
+        rename_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['btn_bg']};
+                color: {theme['fg']};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: white;
+            }}
+        """)
+        rename_btn.clicked.connect(lambda: self.rename_folder())
+        layout.addWidget(rename_btn)
 
         # 打开按钮
         open_btn = QPushButton("打开")
@@ -362,6 +381,17 @@ class FolderItemWidget(QWidget):
                 subprocess.run(["xdg-open", self.path])
         else:
             QMessageBox.warning(self, "提示", f"文件夹不存在:\n{self.path}")
+
+    def rename_folder(self):
+        """重命名文件夹显示名称"""
+        from PyQt5.QtWidgets import QInputDialog
+        new_name, ok = QInputDialog.getText(
+            self, "重命名",
+            "输入新的显示名称:",
+            text=self.display_name
+        )
+        if ok and new_name.strip():
+            self.rename_requested.emit(self.path, new_name.strip())
 
     def paste_to(self):
         """粘贴剪贴板中的文件到此文件夹"""
@@ -1157,6 +1187,7 @@ class QuickFolderPanel(QMainWindow):
             # 连接信号
             widget.delete_requested.connect(self.remove_folder)
             widget.section_toggled.connect(self.toggle_section)
+            widget.rename_requested.connect(self.rename_folder)
 
             item = QListWidgetItem()
             item.setSizeHint(widget.sizeHint() + QSize(0, 10))
@@ -1236,6 +1267,15 @@ class QuickFolderPanel(QMainWindow):
             self.folders = [f for f in self.folders if f["path"] != path]
             self.refresh_folder_list()
             self.save_config()
+
+    def rename_folder(self, path: str, new_name: str):
+        """重命名文件夹显示名称"""
+        for folder in self.folders:
+            if folder["path"] == path:
+                folder["display_name"] = new_name
+                break
+        self.refresh_folder_list()
+        self.save_config()
 
     def on_folder_reordered(self):
         """文件夹重新排序"""

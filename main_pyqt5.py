@@ -242,27 +242,88 @@ def generate_stylesheet(theme: dict) -> str:
 
 
 class DraggableListWidget(QListWidget):
-    """支持拖拽排序的列表控件，无滚动条，根据内容自适应高度"""
+    """支持拖拽排序和外部拖入的列表控件，无滚动条，根据内容自适应高度"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setDragDropMode(QListWidget.InternalMove)
+        self.setDragDropMode(QListWidget.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-        self.setMinimumHeight(0)
+        self.setMinimumHeight(55)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self._drop_callback = None
+        self._move_callback = None
+
+    def set_drop_callback(self, callback):
+        self._drop_callback = callback
+
+    def set_move_callback(self, callback):
+        self._move_callback = callback
 
     def sizeHint(self):
         count = self.count()
         if count == 0:
-            return QSize(super().sizeHint().width(), 30)
+            return QSize(super().sizeHint().width(), 55)
         h = count * 55 + 10
         return QSize(super().sizeHint().width(), h)
 
     def minimumSizeHint(self):
-        return self.sizeHint()
+        return QSize(100, 55)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            # 内部拖拽或跨列表拖拽
+            source = event.source()
+            if source and source != self:
+                event.acceptProposedAction()
+            else:
+                super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            source = event.source()
+            if source and source != self:
+                event.acceptProposedAction()
+            else:
+                super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            # 外部文件/文件夹拖入
+            folders = []
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if path and os.path.isdir(path):
+                    folders.append(path)
+            if folders and self._drop_callback:
+                self._drop_callback(folders)
+            event.acceptProposedAction()
+        else:
+            # 跨列表拖拽（从另一个列表拖入）
+            source = event.source()
+            if source and source != self and self._move_callback:
+                # 获取源列表中选中的项目
+                current_item = source.currentItem()
+                if current_item:
+                    folder_data = current_item.data(Qt.UserRole)
+                    if folder_data:
+                        # 获取拖入位置
+                        drop_row = self.row(self.itemAt(event.pos()))
+                        if drop_row < 0:
+                            drop_row = self.count()
+                        self._move_callback(folder_data, drop_row)
+                        event.acceptProposedAction()
+                        return
+            # 内部拖拽排序
+            super().dropEvent(event)
 
 
 class FolderItemWidget(QWidget):
@@ -888,8 +949,10 @@ class QuickFolderPanel(QMainWindow):
         common_layout.setContentsMargins(4, 4, 4, 4)
         common_layout.setSpacing(2)
         self.common_list = DraggableListWidget()
-        self.common_list.setDragDropMode(QListWidget.InternalMove)
+        self.common_list.setDragDropMode(QListWidget.DragDrop)
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
+        self.common_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=True))
+        self.common_list.set_move_callback(lambda data, pos: self.move_folder_to_section(data, "common", pos))
         common_layout.addWidget(self.common_list)
         layout.addWidget(self.common_group)
 
@@ -914,8 +977,10 @@ class QuickFolderPanel(QMainWindow):
         uncommon_layout.setContentsMargins(4, 4, 4, 4)
         uncommon_layout.setSpacing(2)
         self.uncommon_list = DraggableListWidget()
-        self.uncommon_list.setDragDropMode(QListWidget.InternalMove)
+        self.uncommon_list.setDragDropMode(QListWidget.DragDrop)
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
+        self.uncommon_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=False))
+        self.uncommon_list.set_move_callback(lambda data, pos: self.move_folder_to_section(data, "uncommon", pos))
         uncommon_layout.addWidget(self.uncommon_list)
         layout.addWidget(self.uncommon_group)
 
@@ -923,9 +988,6 @@ class QuickFolderPanel(QMainWindow):
         self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 14px;")
-        layout.addWidget(self.empty_label)
-
-        return tab
         layout.addWidget(self.empty_label)
 
         return tab
@@ -1249,6 +1311,72 @@ class QuickFolderPanel(QMainWindow):
                 })
                 self.refresh_folder_list()
                 self.save_config()
+
+    def add_folders_from_drop(self, paths: list, is_common: bool = True):
+        """从拖拽添加文件夹（添加到顶部）"""
+        added = 0
+        for path in paths:
+            display_name = os.path.basename(path) or path
+            # 检查是否已存在
+            if not any(f["path"] == path for f in self.folders):
+                self.folders.insert(0, {
+                    "path": path,
+                    "display_name": display_name,
+                    "is_common": is_common
+                })
+                added += 1
+        if added > 0:
+            self.refresh_folder_list()
+            self.save_config()
+
+    def move_folder_to_section(self, folder_data: dict, target_section: str, position: int):
+        """将文件夹移动到指定分区"""
+        path = folder_data["path"]
+        is_common = (target_section == "common")
+
+        # 从当前位置移除
+        self.folders = [f for f in self.folders if f["path"] != path]
+
+        # 更新分区
+        folder_data["is_common"] = is_common
+
+        # 计算插入位置（在目标分区中的位置）
+        if is_common:
+            common_folders = [f for f in self.folders if f["is_common"]]
+            if position >= len(common_folders):
+                # 插入到常用分区末尾
+                insert_idx = len(self.folders)
+                for i, f in enumerate(self.folders):
+                    if not f["is_common"]:
+                        insert_idx = i
+                        break
+            else:
+                # 插入到常用分区指定位置
+                insert_idx = 0
+                count = 0
+                for i, f in enumerate(self.folders):
+                    if f["is_common"]:
+                        if count == position:
+                            insert_idx = i
+                            break
+                        count += 1
+        else:
+            uncommon_folders = [f for f in self.folders if not f["is_common"]]
+            if position >= len(uncommon_folders):
+                insert_idx = len(self.folders)
+            else:
+                insert_idx = 0
+                count = 0
+                for i, f in enumerate(self.folders):
+                    if not f["is_common"]:
+                        if count == position:
+                            insert_idx = i
+                            break
+                        count += 1
+
+        self.folders.insert(insert_idx, folder_data)
+        self.refresh_folder_list()
+        self.save_config()
 
     def toggle_section(self, path: str, is_current_common: bool):
         """切换分区（常用/非常用）"""

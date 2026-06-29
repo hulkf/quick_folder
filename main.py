@@ -297,16 +297,9 @@ class QuickFolderPanel:
         accent_bar = tk.Frame(bar, bg=C["accent"], width=4)
         accent_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-        # 左侧图标 + 标题
-        self._title_lbl = tk.Label(bar, text="📁 Quick Folder",
-                                   bg=C["title_bg"], fg=C["fg"],
-                                   font=("Segoe UI", 10, "bold"))
-        self._title_lbl.pack(side=tk.LEFT, padx=(8, 16))
-
-        # 窗口拖动
-        for w in (bar, self._title_lbl):
-            w.bind("<ButtonPress-1>", self._win_drag_start)
-            w.bind("<B1-Motion>", self._win_drag_move)
+        # 窗口拖动（绑定在 bar 上）
+        bar.bind("<ButtonPress-1>", self._win_drag_start)
+        bar.bind("<B1-Motion>", self._win_drag_move)
 
         # Tab 按钮（嵌入标题栏）
         self._tab_buttons = {}
@@ -1148,7 +1141,6 @@ class QuickFolderPanel:
         icon = "📌" if self.topmost else "📍"
         color = C["accent"] if self.topmost else C["gray"]
         self._pin_btn.config(text=icon, fg=color)
-        self._title_lbl.config(text=f"📁 Quick Folder{'  (已取消置顶)' if not self.topmost else ''}")
 
     # ---------- 添加 / 删除 ----------
 

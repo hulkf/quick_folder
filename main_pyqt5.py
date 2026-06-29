@@ -260,7 +260,8 @@ class DraggableListWidget(QListWidget):
             widget = self.itemWidget(item)
             if widget:
                 h += widget.sizeHint().height() + 4
-        return super().sizeHint().adjusted(0, 0, 0, max(0, h - super().sizeHint().height()))
+        base = super().sizeHint()
+        return QSize(base.width(), max(base.height(), h))
 
 
 class FolderItemWidget(QWidget):

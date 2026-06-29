@@ -242,7 +242,7 @@ def generate_stylesheet(theme: dict) -> str:
 
 
 class DraggableListWidget(QListWidget):
-    """支持拖拽排序的列表控件，无滚动条"""
+    """支持拖拽排序的列表控件，无滚动条，根据内容自适应高度"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -251,6 +251,18 @@ class DraggableListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        self.setMinimumHeight(0)
+
+    def sizeHint(self):
+        count = self.count()
+        if count == 0:
+            return QSize(super().sizeHint().width(), 30)
+        h = count * 55 + 10
+        return QSize(super().sizeHint().width(), h)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
 
 
 class FolderItemWidget(QWidget):
@@ -844,6 +856,7 @@ class QuickFolderPanel(QMainWindow):
 
         # 分区：常用
         self.common_group = QGroupBox("⭐ 常用")
+        self.common_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.common_group.setStyleSheet(f"""
             QGroupBox {{
                 border: 1px solid {self.theme['border']};
@@ -869,6 +882,7 @@ class QuickFolderPanel(QMainWindow):
 
         # 分区：非常用
         self.uncommon_group = QGroupBox("📦 非常用")
+        self.uncommon_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.uncommon_group.setStyleSheet(f"""
             QGroupBox {{
                 border: 1px solid {self.theme['border']};
@@ -1170,6 +1184,12 @@ class QuickFolderPanel(QMainWindow):
                 self.uncommon_list.setItemWidget(item, widget)
 
         self.empty_label.setVisible(len(self.folders) == 0)
+
+        # 强制更新列表widget的size hint
+        self.common_list.updateGeometry()
+        self.uncommon_list.updateGeometry()
+        self.common_group.updateGeometry()
+        self.uncommon_group.updateGeometry()
 
         # 自动调整窗口高度
         self.adjust_window_height()

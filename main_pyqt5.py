@@ -363,16 +363,6 @@ class FolderItemWidget(QWidget):
         else:
             QMessageBox.warning(self, "提示", f"文件夹不存在:\n{self.path}")
 
-    def close_folder(self):
-        """关闭文件夹（在资源管理器中选中）"""
-        if os.path.exists(self.path):
-            if sys.platform == "win32":
-                subprocess.run(["explorer", "/select,", self.path])
-            elif sys.platform == "darwin":
-                subprocess.run(["open", "-R", self.path])
-            else:
-                subprocess.run(["xdg-open", os.path.dirname(self.path)])
-
     def paste_to(self):
         """粘贴剪贴板中的文件到此文件夹"""
         clipboard = QApplication.clipboard()
@@ -409,12 +399,6 @@ class FolderItemWidget(QWidget):
             if errors > 0:
                 msg += f"\n{errors} 个文件复制失败"
             QMessageBox.information(self, "粘贴完成", msg)
-
-    def toggle_section(self):
-        """切换分区"""
-        parent_widget = self.window()
-        if hasattr(parent_widget, 'toggle_section'):
-            parent_widget.toggle_section(self.path, self.is_common)
 
     def reorder_files(self):
         """重命名排序文件夹内的文件"""

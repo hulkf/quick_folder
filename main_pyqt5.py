@@ -892,6 +892,12 @@ class QuickFolderPanel(QMainWindow):
         uncommon_layout.addWidget(self.uncommon_list)
         layout.addWidget(self.uncommon_group)
 
+        # 空状态提示
+        self.empty_label = QLabel("✨ 点击「+ 添加文件夹」按钮添加快捷文件夹")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 14px;")
+        layout.addWidget(self.empty_label)
+
         return tab
         layout.addWidget(self.empty_label)
 

@@ -1048,11 +1048,19 @@ class QuickFolderPanel(QMainWindow):
         # 选项行：当前文件夹 + 开始合并按钮
         merge_option_layout = QHBoxLayout()
 
-        self.merge_current_folder_check = QCheckBox("当前文件夹（建立一个合并文件的文件夹）")
+        merge_check_layout = QHBoxLayout()
+        merge_check_layout.setSpacing(4)
+
+        self.merge_current_folder_check = QCheckBox("当前文件夹")
         self.merge_current_folder_check.setChecked(True)
         self.merge_current_folder_check.setStyleSheet(f"color: {self.theme['fg']};")
-        merge_option_layout.addWidget(self.merge_current_folder_check)
+        merge_check_layout.addWidget(self.merge_current_folder_check)
 
+        merge_hint_label = QLabel("（建立一个合并文件的文件夹）")
+        merge_hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        merge_check_layout.addWidget(merge_hint_label)
+
+        merge_option_layout.addLayout(merge_check_layout)
         merge_option_layout.addStretch()
 
         merge_btn = QPushButton("▶ 开始合并")

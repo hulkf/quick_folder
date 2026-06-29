@@ -1044,8 +1044,9 @@ class QuickFolderPanel(QMainWindow):
 
         layout.addLayout(output_layout)
 
-        # 开始合并按钮（在选择目录下方）
+        # 开始合并按钮（在选择目录下方，居右对齐）
         merge_btn_row = QHBoxLayout()
+        merge_btn_row.addStretch()
         merge_btn = QPushButton("▶ 开始合并")
         merge_btn.setFixedHeight(30)
         merge_btn.setStyleSheet(f"""
@@ -1061,7 +1062,6 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         merge_btn.clicked.connect(self.merge_start)
-        merge_btn_row.addStretch()
         merge_btn_row.addWidget(merge_btn)
         layout.addLayout(merge_btn_row)
 
@@ -1121,8 +1121,9 @@ class QuickFolderPanel(QMainWindow):
 
         layout.addLayout(bottom_layout)
 
-        # 开始解压按钮（在选择目录下方）
+        # 开始解压按钮（在选择目录下方，居右对齐）
         extract_btn_row = QHBoxLayout()
+        extract_btn_row.addStretch()
         extract_btn = QPushButton("▶ 开始解压")
         extract_btn.setFixedHeight(30)
         extract_btn.setStyleSheet(f"""
@@ -1138,7 +1139,6 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         extract_btn.clicked.connect(self.extract_start)
-        extract_btn_row.addStretch()
         extract_btn_row.addWidget(extract_btn)
         layout.addLayout(extract_btn_row)
 

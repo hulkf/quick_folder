@@ -415,13 +415,14 @@ class FolderItemWidget(QWidget):
 
         # 删除按钮
         del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(30, 30)
+        del_btn.setFixedSize(34, 30)
         del_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};
                 color: {theme['fg']};
                 border: none;
                 border-radius: 4px;
+                font-size: 14px;
             }}
             QPushButton:hover {{
                 background-color: {theme['danger']};

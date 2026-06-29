@@ -242,13 +242,25 @@ def generate_stylesheet(theme: dict) -> str:
 
 
 class DraggableListWidget(QListWidget):
-    """支持拖拽排序的列表控件"""
+    """支持拖拽排序的列表控件，无滚动条，自动扩展"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setDragDropMode(QListWidget.InternalMove)
         self.setDefaultDropAction(Qt.MoveAction)
         self.setSelectionMode(QListWidget.SingleSelection)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    def sizeHint(self):
+        """根据内容计算建议大小"""
+        h = 0
+        for i in range(self.count()):
+            item = self.item(i)
+            widget = self.itemWidget(item)
+            if widget:
+                h += widget.sizeHint().height() + 4
+        return super().sizeHint().adjusted(0, 0, 0, max(0, h - super().sizeHint().height()))
 
 
 class FolderItemWidget(QWidget):
@@ -554,7 +566,7 @@ class QuickFolderPanel(QMainWindow):
         super().__init__()
         self.setWindowTitle("Quick Folder")
         self.setMinimumSize(400, 300)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowStaysOnTopHint)
 
         # 加载配置
         self.config = self.load_config()
@@ -656,7 +668,7 @@ class QuickFolderPanel(QMainWindow):
         self.load_folders()
 
     def create_title_bar(self) -> QWidget:
-        """创建标题栏（包含窗口控制按钮）"""
+        """创建标题栏（包含 Tab 按钮和 Pin）"""
         title_bar = QWidget()
         title_bar.setFixedHeight(36)
         title_bar.setObjectName("titleBar")
@@ -668,14 +680,27 @@ class QuickFolderPanel(QMainWindow):
         """)
 
         layout = QHBoxLayout(title_bar)
-        layout.setContentsMargins(8, 0, 4, 0)
+        layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(4)
 
-        # 应用标题（可拖动）
-        title = QLabel("📁 Quick Folder")
-        title.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        title.setStyleSheet(f"color: {self.theme['fg']}; background: transparent;")
-        layout.addWidget(title)
+        # Pin 按钮（最左边）
+        self.pin_btn = QPushButton("📌")
+        self.pin_btn.setFixedSize(28, 28)
+        self.pin_btn.setCheckable(True)
+        self.pin_btn.setChecked(True)
+        self.pin_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {self.theme['accent']};
+                border: none;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: {self.theme['tab_hover']};
+            }}
+        """)
+        self.pin_btn.clicked.connect(self.toggle_topmost)
+        layout.addWidget(self.pin_btn)
 
         # Tab 按钮
         self.tab_buttons = []
@@ -714,111 +739,7 @@ class QuickFolderPanel(QMainWindow):
 
         layout.addStretch()
 
-        # 置顶按钮（在最小化左边）
-        self.pin_btn = QPushButton("📌")
-        self.pin_btn.setFixedSize(28, 28)
-        self.pin_btn.setCheckable(True)
-        self.pin_btn.setChecked(True)
-        self.pin_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {self.theme['accent']};
-                border: none;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme['tab_hover']};
-            }}
-        """)
-        self.pin_btn.clicked.connect(self.toggle_topmost)
-        layout.addWidget(self.pin_btn)
-
-        # 最小化按钮
-        min_btn = QPushButton("─")
-        min_btn.setFixedSize(28, 28)
-        min_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {self.theme['gray']};
-                border: none;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme['tab_hover']};
-            }}
-        """)
-        min_btn.clicked.connect(self.showMinimized)
-        layout.addWidget(min_btn)
-
-        # 最大化按钮
-        self.max_btn = QPushButton("□")
-        self.max_btn.setFixedSize(28, 28)
-        self.max_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {self.theme['gray']};
-                border: none;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme['tab_hover']};
-            }}
-        """)
-        self.max_btn.clicked.connect(self.toggle_maximize)
-        layout.addWidget(self.max_btn)
-
-        # 关闭按钮
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {self.theme['gray']};
-                border: none;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme['danger']};
-                color: white;
-            }}
-        """)
-        close_btn.clicked.connect(self.close)
-        layout.addWidget(close_btn)
-
-        # 窗口拖动
-        self._drag_pos = None
-        title_bar.mousePressEvent = self._title_mouse_press
-        title_bar.mouseMoveEvent = self._title_mouse_move
-        title.mousePressEvent = self._title_mouse_press
-        title.mouseMoveEvent = self._title_mouse_move
-
         return title_bar
-
-    def _title_mouse_press(self, event):
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
-            event.accept()
-
-    def _title_mouse_move(self, event):
-        if self._drag_pos and event.buttons() == Qt.LeftButton:
-            self.move(event.globalPos() - self._drag_pos)
-            event.accept()
-
-    def toggle_maximize(self):
-        if self.isMaximized():
-            self.showNormal()
-            self.max_btn.setText("□")
-        else:
-            self.showMaximized()
-            self.max_btn.setText("❐")
-
-    def switch_tab(self, index: int):
-        """切换标签页"""
-        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.settings_tab]
-        for i, tab in enumerate(tabs):
-            tab.setVisible(i == index)
-        for i, btn in enumerate(self.tab_buttons):
-            btn.setChecked(i == index)
 
     def toggle_topmost(self):
         """切换窗口置顶"""
@@ -1126,6 +1047,28 @@ class QuickFolderPanel(QMainWindow):
                 self.uncommon_list.setItemWidget(item, widget)
 
         self.empty_label.setVisible(len(self.folders) == 0)
+
+        # 自动调整窗口高度
+        self.adjust_window_height()
+
+    def adjust_window_height(self):
+        """根据文件夹数量自动调整窗口高度"""
+        folder_count = len(self.folders)
+        # 基础高度：标题栏 + tab栏 + 工具栏 + 分区标题 + 间距
+        base_height = 120
+        # 每个文件夹项高度约55（45 widget + 10 spacing）
+        item_height = 55
+        # 最小和最大高度
+        min_height = 300
+        max_height = 600
+
+        content_height = base_height + folder_count * item_height
+        new_height = max(min_height, min(max_height, content_height))
+
+        # 保持窗口位置不变，只调整高度
+        x = self.x()
+        y = self.y()
+        self.setGeometry(x, y, self.width(), new_height)
 
     def add_folder(self):
         """添加文件夹"""

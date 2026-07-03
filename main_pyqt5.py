@@ -22,7 +22,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
-    QUrl, QPropertyAnimation, QEasingCurve
+    QUrl, QPropertyAnimation, QEasingCurve, QObject, QEvent,
+    QCoreApplication
 )
 from PyQt5.QtGui import (
     QFont, QColor, QPalette, QIcon, QPixmap, QPainter,
@@ -170,10 +171,10 @@ def generate_stylesheet(theme: dict) -> str:
         background-color: {theme['item_bg']};
         border: 1px solid {theme['border']};
         border-radius: 4px;
-        padding: 4px;
+        padding: 4px 4px 0 4px;
     }}
     QListWidget::item {{
-        padding: 8px;
+        padding: 8px 8px 4px 8px;
         border-radius: 4px;
     }}
     QListWidget::item:selected {{
@@ -227,6 +228,7 @@ def generate_stylesheet(theme: dict) -> str:
         border-radius: 4px;
         margin-top: 12px;
         padding-top: 12px;
+        padding-bottom: 0px;
     }}
     QGroupBox::title {{
         subcontrol-origin: margin;
@@ -243,6 +245,8 @@ def generate_stylesheet(theme: dict) -> str:
 
 class DraggableListWidget(QListWidget):
     """支持拖拽排序和外部拖入的列表控件，无滚动条，根据内容自适应高度"""
+
+    _last_dragged_data = None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -264,11 +268,17 @@ class DraggableListWidget(QListWidget):
     def set_move_callback(self, callback):
         self._move_callback = callback
 
+    def startDrag(self, actions):
+        item = self.currentItem()
+        if item:
+            DraggableListWidget._last_dragged_data = item.data(Qt.UserRole)
+        super().startDrag(actions)
+
     def sizeHint(self):
         count = self.count()
         if count == 0:
             return QSize(super().sizeHint().width(), 45)
-        h = count * 55 + 10
+        h = count * 55
         return QSize(super().sizeHint().width(), h)
 
     def minimumSizeHint(self):
@@ -310,18 +320,15 @@ class DraggableListWidget(QListWidget):
             # 跨列表拖拽（从另一个列表拖入）
             source = event.source()
             if source and source != self and self._move_callback:
-                # 获取源列表中选中的项目
-                current_item = source.currentItem()
-                if current_item:
-                    folder_data = current_item.data(Qt.UserRole)
-                    if folder_data:
-                        # 获取拖入位置
-                        drop_row = self.row(self.itemAt(event.pos()))
-                        if drop_row < 0:
-                            drop_row = self.count()
-                        self._move_callback(folder_data, drop_row)
-                        event.acceptProposedAction()
-                        return
+                folder_data = DraggableListWidget._last_dragged_data
+                if folder_data:
+                    DraggableListWidget._last_dragged_data = None
+                    drop_row = self.row(self.itemAt(event.pos()))
+                    if drop_row < 0:
+                        drop_row = self.count()
+                    self._move_callback(folder_data, drop_row)
+                    event.acceptProposedAction()
+                    return
             # 内部拖拽排序
             super().dropEvent(event)
 
@@ -332,6 +339,9 @@ class FolderItemWidget(QWidget):
     delete_requested = pyqtSignal(str)
     section_toggled = pyqtSignal(str, bool)
     rename_requested = pyqtSignal(str, str)
+    clicked = pyqtSignal()
+
+    _current_selected = None
 
     def __init__(self, path: str, display_name: str, is_common: bool, theme: dict, parent=None):
         super().__init__(parent)
@@ -344,8 +354,8 @@ class FolderItemWidget(QWidget):
         self._selected_bg = theme['item_hover']
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(2, 4, 8, 4)
+        layout.setSpacing(4)
 
         # 左侧：图标和名称
         self.sec_icon = QLabel("⭐" if is_common else "📦")
@@ -422,13 +432,37 @@ class FolderItemWidget(QWidget):
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
         layout.addWidget(del_btn)
 
-    def mousePressEvent(self, event):
-        """点击行切换选中状态"""
+    def event(self, e):
+        if e.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease,
+                         QEvent.MouseMove, QEvent.MouseButtonDblClick):
+            w = self.parentWidget()
+            while w:
+                if isinstance(w, DraggableListWidget):
+                    QCoreApplication.sendEvent(w, e)
+                    break
+                w = w.parentWidget()
+        return super().event(e)
+
+    def _on_click(self, event):
+        """点击切换选中状态"""
         if event.button() == Qt.LeftButton:
-            self._selected = not self._selected
-            bg = self._selected_bg if self._selected else self._normal_bg
-            self.setStyleSheet(f"background-color: {bg}; border-radius: 4px;")
-        super().mousePressEvent(event)
+            self._toggle_selected()
+            self.clicked.emit()
+
+    def _toggle_selected(self):
+        """切换选中状态"""
+        if FolderItemWidget._current_selected and FolderItemWidget._current_selected != self:
+            FolderItemWidget._current_selected._selected = False
+            FolderItemWidget._current_selected.setStyleSheet(
+                f"background-color: {FolderItemWidget._current_selected._normal_bg}; border-radius: 4px;"
+            )
+        self._selected = not self._selected
+        if self._selected:
+            FolderItemWidget._current_selected = self
+        else:
+            FolderItemWidget._current_selected = None
+        bg = self._selected_bg if self._selected else self._normal_bg
+        self.setStyleSheet(f"background-color: {bg}; border-radius: 4px;")
 
     def open_folder(self):
         """打开文件夹"""
@@ -839,7 +873,7 @@ class QuickFolderPanel(QMainWindow):
 
         # Pin 按钮（最左边）
         self.pin_btn = QPushButton("📌")
-        self.pin_btn.setFixedSize(28, 28)
+        self.pin_btn.setFixedSize(32, 32)
         self.pin_btn.setCheckable(True)
         self.pin_btn.setChecked(True)
         self.pin_btn.setStyleSheet(f"""
@@ -847,7 +881,7 @@ class QuickFolderPanel(QMainWindow):
                 background-color: {self.theme['tab_inactive']};
                 color: {self.theme['gray']};
                 border: none;
-                font-size: 14px;
+                font-size: 18px;
                 border-radius: 4px;
             }}
             QPushButton:checked {{
@@ -941,6 +975,7 @@ class QuickFolderPanel(QMainWindow):
                 border-radius: 4px;
                 margin-top: 12px;
                 padding-top: 12px;
+                padding-bottom: 0px;
                 color: {self.theme['gold']};
             }}
             QGroupBox::title {{
@@ -950,7 +985,7 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         common_layout = QVBoxLayout(self.common_group)
-        common_layout.setContentsMargins(4, 4, 4, 4)
+        common_layout.setContentsMargins(4, 4, 4, 0)
         common_layout.setSpacing(2)
         self.common_list = DraggableListWidget()
         self.common_list.setDragDropMode(QListWidget.DragDrop)
@@ -969,6 +1004,7 @@ class QuickFolderPanel(QMainWindow):
                 border-radius: 4px;
                 margin-top: 12px;
                 padding-top: 12px;
+                padding-bottom: 0px;
                 color: {self.theme['gray']};
             }}
             QGroupBox::title {{
@@ -978,7 +1014,7 @@ class QuickFolderPanel(QMainWindow):
             }}
         """)
         uncommon_layout = QVBoxLayout(self.uncommon_group)
-        uncommon_layout.setContentsMargins(4, 4, 4, 4)
+        uncommon_layout.setContentsMargins(4, 4, 4, 0)
         uncommon_layout.setSpacing(2)
         self.uncommon_list = DraggableListWidget()
         self.uncommon_list.setDragDropMode(QListWidget.DragDrop)
@@ -1286,9 +1322,11 @@ class QuickFolderPanel(QMainWindow):
             if folder["is_common"]:
                 self.common_list.addItem(item)
                 self.common_list.setItemWidget(item, widget)
+                widget.clicked.connect(lambda checked=False, i=item, lst=self.common_list: lst.setCurrentItem(i))
             else:
                 self.uncommon_list.addItem(item)
                 self.uncommon_list.setItemWidget(item, widget)
+                widget.clicked.connect(lambda checked=False, i=item, lst=self.uncommon_list: lst.setCurrentItem(i))
 
         self.empty_label.setVisible(len(self.folders) == 0)
 
@@ -1307,17 +1345,21 @@ class QuickFolderPanel(QMainWindow):
         common_count = sum(1 for f in self.folders if f["is_common"])
         uncommon_count = sum(1 for f in self.folders if not f["is_common"])
 
-        # 基础高度：标题栏(36) + tab栏(36) + 工具栏(36) + 间距(20)
-        base_height = 130
-        # 每个分区标题高度30
-        section_height = 30
+        # 基础高度：标题栏(36) + 工具栏(36) + 间距(16)
+        base_height = 88
+        # 每个QGroupBox开销：margin-top(12) + padding-top(12) + border(2) = 26
+        group_overhead = 26
         # 每个文件夹项高度55
         item_height = 55
         # 最小和最大高度
-        min_height = 250
+        min_height = 200
         max_height = 700
 
-        content_height = base_height + section_height * 2 + (common_count + uncommon_count) * item_height
+        total_items = common_count + uncommon_count
+        if total_items == 0:
+            content_height = base_height + group_overhead * 2 + 45
+        else:
+            content_height = base_height + group_overhead * 2 + total_items * item_height
         new_height = max(min_height, min(max_height, content_height))
 
         # 保持窗口位置不变，只调整高度
@@ -1849,6 +1891,46 @@ class QuickFolderPanel(QMainWindow):
 # ============================================================
 
 
+class DragFilter(QObject):
+    """Application-level event filter to detect drag gestures on DraggableListWidget items,
+    bypassing child widgets (buttons, labels) that consume mouse events."""
+
+    def __init__(self):
+        super().__init__()
+        self._press_pos = None
+        self._drag_list = None
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            self._press_pos = event.globalPos()
+            self._drag_list = None
+            w = QApplication.widgetAt(event.globalPos())
+            while w:
+                if isinstance(w, DraggableListWidget):
+                    self._drag_list = w
+                    break
+                w = w.parentWidget()
+
+        elif event.type() == QEvent.MouseMove and self._press_pos is not None and self._drag_list is not None:
+            if event.buttons() & Qt.LeftButton:
+                dist = (event.globalPos() - self._press_pos).manhattanLength()
+                if dist >= QApplication.startDragDistance():
+                    pos = self._drag_list.mapFromGlobal(self._press_pos)
+                    item = self._drag_list.itemAt(pos)
+                    if item:
+                        self._drag_list.setCurrentItem(item)
+                        self._drag_list.startDrag(Qt.MoveAction)
+                    self._press_pos = None
+                    self._drag_list = None
+                    return True
+
+        elif event.type() == QEvent.MouseButtonRelease:
+            self._press_pos = None
+            self._drag_list = None
+
+        return False
+
+
 def main():
     # Windows 任务栏图标支持
     if sys.platform == "win32":
@@ -1860,6 +1942,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("Quick Folder")
+    app.installEventFilter(DragFilter())
 
     # 设置应用程序图标
     icon_path = Path(__file__).parent / "icon.ico"

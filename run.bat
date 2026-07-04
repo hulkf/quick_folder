@@ -1,22 +1,28 @@
 @echo off
+setlocal
+
 set "APP_DIR=%~dp0"
 set "LOG=%APP_DIR%startup.log"
+set "SCRIPT=%APP_DIR%main_pyqt5.py"
 
-echo [%DATE% %TIME%] Starting Quick Folder... > "%LOG%"
+cd /d "%APP_DIR%"
+echo [%DATE% %TIME%] Launch requested. >> "%LOG%"
 
-REM Try pythonw first (no console), fall back to python
-pythonw "%APP_DIR%main_pyqt5.py" >> "%LOG%" 2>&1
+where pythonw.exe >nul 2>nul
 if %errorlevel% equ 0 (
-    echo Started successfully with pythonw >> "%LOG%"
-    exit /b
+    start "Quick Folder" /D "%APP_DIR%" pythonw.exe "%SCRIPT%"
+    exit /b 0
 )
 
-echo pythonw failed, trying python... >> "%LOG%"
-python "%APP_DIR%main_pyqt5.py" >> "%LOG%" 2>&1
+where python.exe >nul 2>nul
 if %errorlevel% equ 0 (
-    echo Started successfully with python >> "%LOG%"
-    exit /b
+    start "Quick Folder" /D "%APP_DIR%" python.exe "%SCRIPT%"
+    exit /b 0
 )
 
-echo FAILED to start Quick Folder >> "%LOG%"
-start notepad "%LOG%"
+echo Python was not found in PATH. >> "%LOG%"
+echo Python was not found in PATH.
+echo.
+echo Please install Python or add it to PATH, then run this file again.
+pause
+exit /b 1

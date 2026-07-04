@@ -18,12 +18,13 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QListWidget, QListWidgetItem, QTabWidget,
     QFileDialog, QMessageBox, QProgressBar, QDialog, QLineEdit,
     QGroupBox, QFrame, QSplitter, QMenu, QAction, QSystemTrayIcon,
-    QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox, QCheckBox
+    QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox, QCheckBox,
+    QGridLayout, QInputDialog, QFileIconProvider
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
     QUrl, QPropertyAnimation, QEasingCurve, QObject, QEvent,
-    QCoreApplication
+    QCoreApplication, QFileInfo
 )
 from PyQt5.QtGui import (
     QFont, QColor, QPalette, QIcon, QPixmap, QPainter,
@@ -38,6 +39,7 @@ import shutil
 import ctypes
 import zipfile
 import tarfile
+import re
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -349,6 +351,7 @@ class FolderItemWidget(QWidget):
         self.display_name = display_name
         self.is_common = is_common
         self.theme = theme
+        self._name_full_text = display_name
         self._selected = False
         self._normal_bg = theme['item_bg']
         self._selected_bg = theme['item_hover']
@@ -370,11 +373,20 @@ class FolderItemWidget(QWidget):
         folder_icon.setFont(QFont("Segoe UI Emoji", 11))
         layout.addWidget(folder_icon)
 
-        name_label = QLabel(display_name)
-        name_label.setFont(QFont("Segoe UI", 10))
-        name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
-        name_label.setMinimumWidth(100)
-        layout.addWidget(name_label, 1)
+        self.name_label = QLabel(display_name)
+        self.name_label.setFont(QFont("Segoe UI", 10))
+        self.name_label.setStyleSheet(f"color: {theme['fg'] if exists else theme['danger']}; background: transparent;")
+        self.name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.name_label.setMinimumWidth(0)
+        self.name_label.setToolTip(display_name)
+        layout.addWidget(self.name_label, 1)
+
+        button_box = QWidget()
+        button_box.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        button_box.setStyleSheet("background: transparent;")
+        button_layout = QHBoxLayout(button_box)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(4)
 
         # 右侧：按钮
         btn_style = f"""
@@ -394,25 +406,25 @@ class FolderItemWidget(QWidget):
         open_btn.setFixedSize(50, 30)
         open_btn.setStyleSheet(btn_style)
         open_btn.clicked.connect(lambda: self.open_folder())
-        layout.addWidget(open_btn)
+        button_layout.addWidget(open_btn)
 
         paste_btn = QPushButton("粘贴")
         paste_btn.setFixedSize(50, 30)
         paste_btn.setStyleSheet(btn_style)
         paste_btn.clicked.connect(lambda: self.paste_to())
-        layout.addWidget(paste_btn)
+        button_layout.addWidget(paste_btn)
 
         reorder_btn = QPushButton("重排序")
         reorder_btn.setFixedSize(65, 30)
         reorder_btn.setStyleSheet(btn_style)
         reorder_btn.clicked.connect(lambda: self.reorder_files())
-        layout.addWidget(reorder_btn)
+        button_layout.addWidget(reorder_btn)
 
         rename_btn = QPushButton("重命名")
         rename_btn.setFixedSize(65, 30)
         rename_btn.setStyleSheet(btn_style)
         rename_btn.clicked.connect(lambda: self.rename_folder())
-        layout.addWidget(rename_btn)
+        button_layout.addWidget(rename_btn)
 
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(34, 30)
@@ -430,7 +442,10 @@ class FolderItemWidget(QWidget):
             }}
         """)
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
-        layout.addWidget(del_btn)
+        button_layout.addWidget(del_btn)
+        button_box.setFixedWidth(button_layout.sizeHint().width())
+        layout.addWidget(button_box)
+        self._update_name_elide()
 
     def event(self, e):
         if e.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease,
@@ -442,6 +457,16 @@ class FolderItemWidget(QWidget):
                     break
                 w = w.parentWidget()
         return super().event(e)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_name_elide()
+
+    def _update_name_elide(self):
+        if not hasattr(self, "name_label"):
+            return
+        metrics = QFontMetrics(self.name_label.font())
+        self.name_label.setText(metrics.elidedText(self._name_full_text, Qt.ElideRight, max(0, self.name_label.width() - 4)))
 
     def _on_click(self, event):
         """点击切换选中状态"""
@@ -578,6 +603,155 @@ class FolderItemWidget(QWidget):
         if errors > 0:
             msg += f"\n{errors} 个文件重命名失败"
         QMessageBox.information(self, "完成", msg)
+
+
+class LaunchGridArea(QWidget):
+    files_dropped = pyqtSignal(list)
+
+    def __init__(self, theme: dict, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.running_cells = set()
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(220)
+        self.setStyleSheet(f"background-color: {theme['item_bg']}; border: 1px solid {theme['border']}; border-radius: 4px;")
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.toLocalFile() and os.path.isfile(u.toLocalFile())]
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        cols, cell_h = 4, 102
+        cell_w = max(1, self.width() // cols)
+        for idx in self.running_cells:
+            row, col = divmod(idx, cols)
+            x, y = col * cell_w, row * cell_h
+            w = self.width() - x if col == cols - 1 else cell_w
+            painter.fillRect(x, y, w, cell_h, QColor(self.theme["tab_active"]))
+        normal_pen = QPen(QColor(self.theme["gray"]))
+        active_pen = QPen(QColor(self.theme["accent_hover"]))
+        for pen in (normal_pen, active_pen):
+            pen.setWidth(1)
+        rows = max(1, (self.layout().count() + cols - 1) // cols) if self.layout() else 1
+        for col in range(1, cols):
+            x = col * cell_w
+            touches = any((r * cols + col - 1 in self.running_cells) or (r * cols + col in self.running_cells) for r in range(rows))
+            painter.setPen(active_pen if touches else normal_pen)
+            painter.drawLine(x, 0, x, self.height())
+        y = cell_h
+        while y < self.height():
+            row = y // cell_h
+            touches = any(((row - 1) * cols + c in self.running_cells) or (row * cols + c in self.running_cells) for c in range(cols))
+            painter.setPen(active_pen if touches else normal_pen)
+            painter.drawLine(0, y, self.width(), y)
+            y += cell_h
+
+    def set_cell_running(self, index: int, running: bool):
+        if running:
+            self.running_cells.add(index)
+        else:
+            self.running_cells.discard(index)
+        self.update()
+
+
+class LaunchCellWidget(QWidget):
+    def __init__(self, theme: dict, index: int, parent=None):
+        super().__init__(parent)
+        self.index = index
+        self.setFixedHeight(102)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setStyleSheet("background: transparent; border: none;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addStretch()
+
+    def update_state(self, running: bool):
+        parent = self.parentWidget()
+        if isinstance(parent, LaunchGridArea):
+            parent.set_cell_running(self.index, running)
+
+
+class LaunchItemWidget(QWidget):
+    launch_requested = pyqtSignal(dict)
+    close_requested = pyqtSignal(dict)
+    delete_requested = pyqtSignal(dict)
+
+    def __init__(self, item: dict, theme: dict, parent=None):
+        super().__init__(parent)
+        self.item = item
+        self.theme = theme
+        self.running = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+        self.setFixedHeight(100)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        layout.addStretch(1)
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        self.apply_icon()
+        layout.addWidget(self.icon_label)
+        self.name_label = QLabel(item.get("name") or os.path.basename(item.get("path", "")) or "App")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        layout.addWidget(self.name_label)
+        layout.addStretch(1)
+        self.update_state(False)
+
+    def apply_icon(self):
+        path = self.item.get("path", "")
+        if path and os.path.exists(path):
+            pix = QFileIconProvider().icon(QFileInfo(path)).pixmap(34, 34)
+            if not pix.isNull():
+                self.icon_label.setPixmap(pix)
+                return
+        self.icon_label.setText("APP")
+
+    def update_state(self, running: bool):
+        self.running = running
+        parent = self.parentWidget()
+        if isinstance(parent, LaunchCellWidget):
+            parent.update_state(running)
+        self.setStyleSheet(f"background: transparent; border: none; color: {'white' if running else self.theme['fg']};")
+        self.name_label.setStyleSheet(f"color: {'white' if running else self.theme['fg']}; background: transparent;")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.running:
+            self.close_requested.emit(self.item)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.launch_requested.emit(self.item)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def show_context_menu(self, pos):
+        menu = QMenu(self)
+        act = QAction("删除快捷方式", self)
+        act.triggered.connect(lambda: self.delete_requested.emit(self.item))
+        menu.addAction(act)
+        menu.exec_(self.mapToGlobal(pos))
 
 
 class MergeFolderItemWidget(QWidget):
@@ -760,6 +934,14 @@ class QuickFolderPanel(QMainWindow):
         self.config = self.load_config()
         self.theme_name = self.config.get("theme", "dark_teal")
         self.theme = THEMES.get(self.theme_name, THEMES["dark_teal"])
+        self.launch_items = self.load_launch_items()
+        self.launch_processes = {}
+        self.launch_tiles = {}
+        self.running_launch_paths = set()
+        self.running_launch_pids = {}
+        self.launch_timer = QTimer(self)
+        self.launch_timer.timeout.connect(self.check_launch_processes)
+        self.launch_timer.start(1500)
 
         # 设置样式
         self.setStyleSheet(generate_stylesheet(self.theme))
@@ -785,6 +967,24 @@ class QuickFolderPanel(QMainWindow):
         try:
             config = {
                 "folders": [(f["path"], f["is_common"]) for f in self.folders],
+                "launch_items": [
+                    {"name": i.get("name", ""), "path": i.get("path", ""), "target_path": i.get("target_path", "")}
+                    for i in self.launch_items
+                ],
+                "extract_delete_archive": self.extract_delete_archive_check.isChecked()
+                    if hasattr(self, "extract_delete_archive_check")
+                    else self.config.get("extract_delete_archive", True),
+                "merge_delete_source_folders": self.merge_delete_source_check.isChecked()
+                    if hasattr(self, "merge_delete_source_check")
+                    else self.config.get("merge_delete_source_folders", False),
+                "folder_sections_collapsed": {
+                    "common": self.common_group.isChecked() is False
+                        if hasattr(self, "common_group")
+                        else self.config.get("folder_sections_collapsed", {}).get("common", False),
+                    "uncommon": self.uncommon_group.isChecked() is False
+                        if hasattr(self, "uncommon_group")
+                        else self.config.get("folder_sections_collapsed", {}).get("uncommon", False),
+                },
                 "theme": self.theme_name,
                 "window_pos": {
                     "x": self.x(),
@@ -837,16 +1037,19 @@ class QuickFolderPanel(QMainWindow):
         self.folder_tab = self.create_folder_tab()
         self.merge_tab = self.create_merge_tab()
         self.extract_tab = self.create_extract_tab()
+        self.launch_tab = self.create_launch_tab()
         self.settings_tab = self.create_settings_tab()
 
         self.content_layout.addWidget(self.folder_tab)
         self.content_layout.addWidget(self.merge_tab)
         self.content_layout.addWidget(self.extract_tab)
+        self.content_layout.addWidget(self.launch_tab)
         self.content_layout.addWidget(self.settings_tab)
 
         # 隐藏非活动 tab
         self.merge_tab.hide()
         self.extract_tab.hide()
+        self.launch_tab.hide()
         self.settings_tab.hide()
 
         main_layout.addWidget(self.content_stack, 1)
@@ -901,7 +1104,8 @@ class QuickFolderPanel(QMainWindow):
             ("📂 文件夹", 0),
             ("📁 合并", 1),
             ("📦 解压", 2),
-            ("⚙️ 设置", 3),
+            ("🚀 启动", 3),
+            ("⚙️ 设置", 4),
         ]
 
         for label, idx in tabs:
@@ -945,7 +1149,8 @@ class QuickFolderPanel(QMainWindow):
 
     def switch_tab(self, index: int):
         """切换标签页"""
-        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.settings_tab]
+        self.current_tab_index = index
+        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.launch_tab, self.settings_tab]
         for i, tab in enumerate(tabs):
             tab.setVisible(i == index)
         for i, btn in enumerate(self.tab_buttons):
@@ -968,6 +1173,9 @@ class QuickFolderPanel(QMainWindow):
 
         # 分区：常用
         self.common_group = QGroupBox("⭐ 常用")
+        self.common_group.setCheckable(True)
+        self.common_group.setChecked(not self.config.get("folder_sections_collapsed", {}).get("common", False))
+        self.common_group.toggled.connect(lambda checked: self.on_folder_section_toggled("common", checked))
         self.common_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.common_group.setStyleSheet(f"""
             QGroupBox {{
@@ -993,10 +1201,14 @@ class QuickFolderPanel(QMainWindow):
         self.common_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=True))
         self.common_list.set_move_callback(lambda data, pos: self.move_folder_to_section(data, "common", pos))
         common_layout.addWidget(self.common_list)
+        self.common_list.setVisible(self.common_group.isChecked())
         layout.addWidget(self.common_group)
 
         # 分区：非常用
         self.uncommon_group = QGroupBox("📦 非常用")
+        self.uncommon_group.setCheckable(True)
+        self.uncommon_group.setChecked(not self.config.get("folder_sections_collapsed", {}).get("uncommon", False))
+        self.uncommon_group.toggled.connect(lambda checked: self.on_folder_section_toggled("uncommon", checked))
         self.uncommon_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.uncommon_group.setStyleSheet(f"""
             QGroupBox {{
@@ -1022,6 +1234,7 @@ class QuickFolderPanel(QMainWindow):
         self.uncommon_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=False))
         self.uncommon_list.set_move_callback(lambda data, pos: self.move_folder_to_section(data, "uncommon", pos))
         uncommon_layout.addWidget(self.uncommon_list)
+        self.uncommon_list.setVisible(self.uncommon_group.isChecked())
         layout.addWidget(self.uncommon_group)
 
         # 空状态提示
@@ -1030,6 +1243,43 @@ class QuickFolderPanel(QMainWindow):
         self.empty_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 14px;")
         layout.addWidget(self.empty_label)
 
+        return tab
+
+    def create_launch_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        add_btn = QPushButton("➕ 添加快捷方式")
+        add_btn.clicked.connect(self.add_launch_item)
+        toolbar.addWidget(add_btn)
+        paste_btn = QPushButton("📋 粘贴路径")
+        paste_btn.clicked.connect(self.paste_launch_item)
+        toolbar.addWidget(paste_btn)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+
+        self.launch_scroll = QScrollArea()
+        self.launch_scroll.setWidgetResizable(True)
+        self.launch_scroll.setFrameShape(QFrame.NoFrame)
+        self.launch_grid_host = LaunchGridArea(self.theme)
+        self.launch_grid_host.files_dropped.connect(self.add_launch_items_from_drop)
+        self.launch_grid = QGridLayout(self.launch_grid_host)
+        self.launch_grid.setContentsMargins(0, 0, 0, 0)
+        self.launch_grid.setSpacing(0)
+        self.launch_grid.setAlignment(Qt.AlignTop)
+        for col in range(4):
+            self.launch_grid.setColumnStretch(col, 1)
+        self.launch_scroll.setWidget(self.launch_grid_host)
+        layout.addWidget(self.launch_scroll, 1)
+
+        self.launch_empty_label = QLabel("双击方格启动应用；运行后单击方格可确认关闭。")
+        self.launch_empty_label.setAlignment(Qt.AlignCenter)
+        self.launch_empty_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 13px;")
+        layout.addWidget(self.launch_empty_label)
+        self.refresh_launch_grid()
         return tab
 
     def create_merge_tab(self) -> QWidget:
@@ -1096,6 +1346,12 @@ class QuickFolderPanel(QMainWindow):
         merge_hint_label = QLabel("（建立一个合并文件的文件夹）")
         merge_hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
         merge_check_layout.addWidget(merge_hint_label)
+
+        self.merge_delete_source_check = QCheckBox("删除旧文件夹")
+        self.merge_delete_source_check.setChecked(self.config.get("merge_delete_source_folders", False))
+        self.merge_delete_source_check.setStyleSheet(f"color: {self.theme['fg']};")
+        self.merge_delete_source_check.stateChanged.connect(lambda _: self.save_config())
+        merge_check_layout.addWidget(self.merge_delete_source_check)
 
         merge_option_layout.addLayout(merge_check_layout)
         merge_option_layout.addStretch()
@@ -1187,6 +1443,12 @@ class QuickFolderPanel(QMainWindow):
         hint_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
         option_layout.addWidget(hint_label)
 
+        self.extract_delete_archive_check = QCheckBox("删除压缩包")
+        self.extract_delete_archive_check.setChecked(self.config.get("extract_delete_archive", True))
+        self.extract_delete_archive_check.setStyleSheet(f"color: {self.theme['fg']};")
+        self.extract_delete_archive_check.stateChanged.connect(lambda _: self.save_config())
+        option_layout.addWidget(self.extract_delete_archive_check)
+
         option_layout.addStretch()
 
         extract_btn = QPushButton("▶ 开始解压")
@@ -1241,6 +1503,18 @@ class QuickFolderPanel(QMainWindow):
         theme_layout.addWidget(self.theme_combo, 1)
 
         layout.addWidget(theme_group)
+
+        system_group = QGroupBox("系统")
+        system_layout = QVBoxLayout(system_group)
+        self.startup_check = QCheckBox("开机自动启动")
+        self.startup_check.setChecked(self.is_startup_enabled())
+        self.startup_check.setStyleSheet(f"color: {self.theme['fg']};")
+        self.startup_check.stateChanged.connect(self.on_startup_changed)
+        system_layout.addWidget(self.startup_check)
+        startup_hint = QLabel("优先使用 pythonw 后台启动 Quick Folder")
+        startup_hint.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        system_layout.addWidget(startup_hint)
+        layout.addWidget(system_group)
         layout.addStretch()
 
         # 关于
@@ -1252,6 +1526,43 @@ class QuickFolderPanel(QMainWindow):
         layout.addWidget(about_group)
 
         return tab
+
+    def startup_registry_value(self) -> str:
+        script = Path(__file__).resolve()
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if sys.platform == "win32" and pythonw.exists():
+            return f'"{pythonw}" "{script}"'
+        return f'"{Path(__file__).parent / "run.bat"}"'
+
+    def is_startup_enabled(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+                value, _ = winreg.QueryValueEx(key, "QuickFolder")
+            return value == self.startup_registry_value()
+        except Exception:
+            return False
+
+    def set_startup_enabled(self, enabled: bool):
+        if sys.platform != "win32":
+            return
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE) as key:
+                if enabled:
+                    winreg.SetValueEx(key, "QuickFolder", 0, winreg.REG_SZ, self.startup_registry_value())
+                else:
+                    try:
+                        winreg.DeleteValue(key, "QuickFolder")
+                    except FileNotFoundError:
+                        pass
+        except Exception as e:
+            QMessageBox.warning(self, "设置失败", f"开机启动设置失败:\n{e}")
+
+    def on_startup_changed(self, state):
+        self.set_startup_enabled(state == Qt.Checked)
 
     def on_theme_changed(self, index):
         """主题下拉框变化"""
@@ -1283,6 +1594,207 @@ class QuickFolderPanel(QMainWindow):
         # 恢复文件夹列表
         self.folders = folders_backup
         self.refresh_folder_list()
+        if hasattr(self, "launch_grid"):
+            self.refresh_launch_grid()
+
+    def load_launch_items(self) -> list:
+        items = []
+        for raw in self.config.get("launch_items", []):
+            if isinstance(raw, dict) and raw.get("path"):
+                items.append({
+                    "name": raw.get("name") or os.path.basename(raw.get("path", "")),
+                    "path": raw.get("path", ""),
+                    "target_path": raw.get("target_path", "")
+                })
+        return items
+
+    def resolve_lnk_target_from_file(self, path: str) -> str:
+        try:
+            data = Path(path).read_bytes()
+        except Exception:
+            return ""
+        candidates = []
+        for enc in ("utf-16le", "mbcs", "utf-8"):
+            try:
+                text = data.decode(enc, errors="ignore")
+            except Exception:
+                continue
+            candidates.extend(re.findall(r"[A-Za-z]:\\[^<>:\"|?*\r\n\x00]+?\.exe", text, re.IGNORECASE))
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return os.path.normcase(os.path.normpath(candidate))
+        return ""
+
+    def resolve_launch_target(self, path: str) -> str:
+        if not path:
+            return ""
+        suffix = Path(path).suffix.lower()
+        if suffix == ".lnk":
+            target = self.resolve_lnk_target_from_file(path)
+            if target:
+                return target
+        return os.path.normcase(os.path.normpath(path))
+
+    def running_executable_paths(self) -> set:
+        if sys.platform != "win32":
+            return set()
+        paths, pids = set(), {}
+        try:
+            import ctypes.wintypes as wintypes
+            psapi = ctypes.WinDLL("Psapi.dll")
+            kernel32 = ctypes.WinDLL("Kernel32.dll")
+            arr = (wintypes.DWORD * 4096)()
+            needed = wintypes.DWORD()
+            if not psapi.EnumProcesses(arr, ctypes.sizeof(arr), ctypes.byref(needed)):
+                return paths
+            count = needed.value // ctypes.sizeof(wintypes.DWORD)
+            for pid in arr[:count]:
+                handle = kernel32.OpenProcess(0x1000 | 0x0010, False, pid)
+                if not handle:
+                    continue
+                try:
+                    size = wintypes.DWORD(32768)
+                    buf = ctypes.create_unicode_buffer(size.value)
+                    if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                        proc_path = os.path.normcase(os.path.normpath(buf.value))
+                        paths.add(proc_path)
+                        pids.setdefault(proc_path, []).append(int(pid))
+                finally:
+                    kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+        self.running_launch_pids = pids
+        return paths
+
+    def refresh_running_launch_paths(self):
+        self.running_launch_paths = self.running_executable_paths()
+
+    def is_launch_item_running(self, item: dict) -> bool:
+        path = item.get("path", "")
+        if path in self.launch_processes:
+            return True
+        target = item.get("target_path") or ""
+        if target and Path(target).suffix.lower() == ".lnk":
+            target = ""
+        if not target:
+            target = self.resolve_launch_target(path)
+        if target and item.get("target_path") != target:
+            item["target_path"] = target
+        if target and target in getattr(self, "running_launch_paths", set()):
+            return True
+        exe = os.path.basename(target or path).lower()
+        return any(os.path.basename(p).lower() == exe for p in getattr(self, "running_launch_paths", set()))
+
+    def refresh_launch_grid(self):
+        if not hasattr(self, "launch_grid"):
+            return
+        self.refresh_running_launch_paths()
+        while self.launch_grid.count():
+            child = self.launch_grid.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        self.launch_grid_host.running_cells = set()
+        self.launch_tiles = {}
+        cols = 4
+        visible_cells = max(16, ((len(self.launch_items) + cols - 1) // cols) * cols)
+        visible_rows = max(1, (visible_cells + cols - 1) // cols)
+        self.launch_grid_host.setMinimumHeight(visible_rows * 102)
+        self.launch_grid_host.setMaximumHeight(16777215)
+        for index, item in enumerate(self.launch_items):
+            cell = LaunchCellWidget(self.theme, index=index)
+            tile = LaunchItemWidget(item, self.theme)
+            tile.launch_requested.connect(self.launch_item)
+            tile.close_requested.connect(self.confirm_close_launch_item)
+            tile.delete_requested.connect(self.remove_launch_item)
+            self.launch_tiles[item.get("path", "")] = tile
+            cell.layout().insertWidget(0, tile)
+            tile.update_state(self.is_launch_item_running(item))
+            self.launch_grid.addWidget(cell, index // cols, index % cols)
+        for index in range(len(self.launch_items), visible_cells):
+            self.launch_grid.addWidget(LaunchCellWidget(self.theme, index=index), index // cols, index % cols)
+        self.launch_empty_label.setVisible(len(self.launch_items) == 0)
+
+    def add_launch_item(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择应用或脚本", "", "可启动文件 (*.exe *.bat *.cmd *.lnk *.ps1);;所有文件 (*)")
+        if path:
+            self.add_launch_item_path(path)
+
+    def paste_launch_item(self):
+        mime = QApplication.clipboard().mimeData()
+        if mime.hasUrls():
+            self.add_launch_items_from_drop([u.toLocalFile() for u in mime.urls()])
+
+    def add_launch_items_from_drop(self, paths: list):
+        for path in paths:
+            if path and os.path.isfile(path):
+                self.add_launch_item_path(path, ask_name=False, quiet=True)
+
+    def add_launch_item_path(self, path: str, ask_name: bool = True, quiet: bool = False):
+        path = os.path.normpath(path)
+        if any(i.get("path") == path for i in self.launch_items):
+            return
+        name = os.path.splitext(os.path.basename(path))[0] or path
+        if ask_name:
+            entered, ok = QInputDialog.getText(self, "快捷方式名称", "显示名称:", text=name)
+            if not ok:
+                return
+            name = entered.strip() or name
+        self.launch_items.append({"name": name, "path": path, "target_path": self.resolve_launch_target(path)})
+        self.refresh_launch_grid()
+        self.save_config()
+
+    def remove_launch_item(self, item: dict):
+        path = item.get("path", "")
+        self.launch_items = [i for i in self.launch_items if i.get("path") != path]
+        self.launch_processes.pop(path, None)
+        self.refresh_launch_grid()
+        self.save_config()
+
+    def launch_item(self, item: dict):
+        path = item.get("path", "")
+        if not path or not os.path.exists(path):
+            return
+        suffix = Path(path).suffix.lower()
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if sys.platform == "win32" and suffix in (".bat", ".cmd"):
+            proc = subprocess.Popen(["cmd.exe", "/c", path], cwd=os.path.dirname(path) or None, creationflags=flags)
+        elif sys.platform == "win32" and suffix == ".ps1":
+            proc = subprocess.Popen(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", path], cwd=os.path.dirname(path) or None, creationflags=flags)
+        else:
+            proc = subprocess.Popen([path], cwd=os.path.dirname(path) or None, shell=(suffix == ".lnk"))
+        self.launch_processes[path] = proc
+        self.check_launch_processes()
+
+    def confirm_close_launch_item(self, item: dict):
+        path = item.get("path", "")
+        reply = QMessageBox.question(self, "确认关闭", f"确定关闭这个应用吗？\n{item.get('name', path)}", QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        proc = self.launch_processes.get(path)
+        pids = []
+        if proc:
+            pids.append(proc.pid)
+        else:
+            target = item.get("target_path") or self.resolve_launch_target(path)
+            target = os.path.normcase(os.path.normpath(target)) if target else ""
+            pids = list(self.running_launch_pids.get(target, []))
+        for pid in pids:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        self.launch_processes.pop(path, None)
+        self.check_launch_processes()
+
+    def check_launch_processes(self):
+        if not hasattr(self, "launch_tiles"):
+            return
+        self.refresh_running_launch_paths()
+        for path, proc in list(self.launch_processes.items()):
+            if proc.poll() is not None:
+                self.launch_processes.pop(path, None)
+        for item in self.launch_items:
+            tile = self.launch_tiles.get(item.get("path", ""))
+            if tile:
+                tile.update_state(self.is_launch_item_running(item))
 
     def load_folders(self):
         """从配置加载文件夹列表"""
@@ -1339,6 +1851,14 @@ class QuickFolderPanel(QMainWindow):
         # 自动调整窗口高度
         self.adjust_window_height()
 
+    def on_folder_section_toggled(self, section: str, checked: bool):
+        if section == "common":
+            self.common_list.setVisible(checked)
+        else:
+            self.uncommon_list.setVisible(checked)
+        self.adjust_window_height()
+        self.save_config()
+
     def adjust_window_height(self):
         """根据文件夹数量自动调整窗口高度"""
         # 分别计算常用和非常用文件夹数量
@@ -1355,7 +1875,11 @@ class QuickFolderPanel(QMainWindow):
         min_height = 200
         max_height = 700
 
-        total_items = common_count + uncommon_count
+        total_items = 0
+        if not hasattr(self, "common_group") or self.common_group.isChecked():
+            total_items += common_count
+        if not hasattr(self, "uncommon_group") or self.uncommon_group.isChecked():
+            total_items += uncommon_count
         if total_items == 0:
             content_height = base_height + group_overhead * 2 + 45
         else:
@@ -1538,6 +2062,11 @@ class QuickFolderPanel(QMainWindow):
         if not files:
             return
 
+        if getattr(self, "current_tab_index", 0) == 3:
+            self.add_launch_items_from_drop([f for f in files if os.path.isfile(f)])
+            event.acceptProposedAction()
+            return
+
         folders = [f for f in files if os.path.isdir(f)]
         archive_exts = ('.zip', '.rar', '.7z', '.tar', '.tar.gz', '.tgz', '.tar.bz2')
         archive_files = [f for f in files if os.path.isfile(f) and f.lower().endswith(archive_exts)]
@@ -1694,6 +2223,8 @@ class QuickFolderPanel(QMainWindow):
         if not folders:
             QMessageBox.warning(self, "提示", "没有有效的文件夹可合并")
             return
+        self._last_merge_source_folders = [path for path, _ in folders]
+        self._last_merge_output = os.path.normcase(os.path.normpath(output))
 
         # 显示进度条
         self.merge_progress.setVisible(True)
@@ -1714,9 +2245,25 @@ class QuickFolderPanel(QMainWindow):
     def on_merge_finished(self, copied: int, renamed: int):
         """合并完成"""
         self.merge_progress.setVisible(False)
+        deleted_folders = 0
+        delete_errors = 0
+        if copied > 0 and getattr(self, "merge_delete_source_check", None) and self.merge_delete_source_check.isChecked():
+            for folder in getattr(self, "_last_merge_source_folders", []):
+                try:
+                    normalized = os.path.normcase(os.path.normpath(folder))
+                    if normalized != getattr(self, "_last_merge_output", "") and os.path.isdir(folder):
+                        shutil.rmtree(folder)
+                        deleted_folders += 1
+                except Exception as e:
+                    delete_errors += 1
+                    print(f"删除旧文件夹失败: {folder} -> {e}")
         msg = f"已合并 {copied} 个文件"
         if renamed > 0:
             msg += f"\n{renamed} 个文件被重命名"
+        if deleted_folders > 0:
+            msg += f"\n已删除 {deleted_folders} 个旧文件夹"
+        if delete_errors > 0:
+            msg += f"\n{delete_errors} 个旧文件夹删除失败"
         QMessageBox.information(self, "合并完成", msg)
 
     def on_merge_error(self, error: str):
@@ -1796,6 +2343,7 @@ class QuickFolderPanel(QMainWindow):
 
         # 检查是否启用独立文件夹
         separate_mode = self.extract_separate_check.isChecked()
+        delete_archive = self.extract_delete_archive_check.isChecked()
 
         # 显示进度条
         self.extract_progress.setVisible(True)
@@ -1805,6 +2353,9 @@ class QuickFolderPanel(QMainWindow):
         # 执行解压
         success = 0
         errors = 0
+        extracted_files = []
+        deleted_archives = 0
+        delete_errors = 0
         for i, file_path in enumerate(files):
             try:
                 if separate_mode:
@@ -1818,6 +2369,7 @@ class QuickFolderPanel(QMainWindow):
 
                 self.do_extract(file_path, extract_dir)
                 success += 1
+                extracted_files.append(file_path)
             except Exception as e:
                 errors += 1
                 print(f"解压失败: {file_path} -> {e}")
@@ -1826,9 +2378,22 @@ class QuickFolderPanel(QMainWindow):
 
         self.extract_progress.setVisible(False)
 
+        if delete_archive:
+            for file_path in extracted_files:
+                try:
+                    os.remove(file_path)
+                    deleted_archives += 1
+                except Exception as e:
+                    delete_errors += 1
+                    print(f"删除压缩包失败: {file_path} -> {e}")
+
         msg = f"解压完成：{success} 个成功"
         if errors > 0:
             msg += f"，{errors} 个失败"
+        if deleted_archives > 0:
+            msg += f"\n已删除 {deleted_archives} 个压缩包"
+        if delete_errors > 0:
+            msg += f"\n{delete_errors} 个压缩包删除失败"
         QMessageBox.information(self, "完成", msg)
 
         # 解压成功后打开目录

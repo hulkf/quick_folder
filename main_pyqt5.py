@@ -1000,6 +1000,7 @@ class LaunchItemWidget(QWidget):
         self.drag_start_pos = QPoint()
         self.dragging = False
         self.suppress_next_close = False
+        self.ignore_next_release_close = False
         self.close_click_timer = QTimer(self)
         self.close_click_timer.setSingleShot(True)
         self.close_click_timer.timeout.connect(self.emit_close_request)
@@ -1066,6 +1067,10 @@ class LaunchItemWidget(QWidget):
         drag.exec_(Qt.MoveAction)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.ignore_next_release_close:
+            self.ignore_next_release_close = False
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and self.running and not self.dragging:
             self.close_click_timer.start(QApplication.doubleClickInterval() + 40)
             event.accept()
@@ -1076,8 +1081,9 @@ class LaunchItemWidget(QWidget):
         if event.button() == Qt.LeftButton:
             if self.close_click_timer.isActive():
                 self.close_click_timer.stop()
+            self.ignore_next_release_close = True
+            self.suppress_next_close = True
             if self.running:
-                self.suppress_next_close = True
                 event.accept()
                 return
             self.launch_requested.emit(self.item)

@@ -72,6 +72,7 @@ FOLDER_ACTIONS = {
 }
 FOLDER_DELETE_BUTTON_WIDTH = 34
 FOLDER_ACTION_BUTTON_SPACING = 4
+FOLDER_ACTION_ROW_RIGHT_INSET = 28
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
     ".tar.xz", ".txz", ".gz", ".bz2", ".xz", ".lz", ".lzma", ".zst",
@@ -1358,7 +1359,7 @@ class QuickFolderPanel(QMainWindow):
         action_width = sum(FOLDER_ACTIONS.get(a, {}).get("width", 60) for a in actions)
         button_count = len(actions) + 1
         spacing_width = FOLDER_ACTION_BUTTON_SPACING * max(0, button_count - 1)
-        return action_width + FOLDER_DELETE_BUTTON_WIDTH + spacing_width
+        return action_width + FOLDER_DELETE_BUTTON_WIDTH + spacing_width + FOLDER_ACTION_ROW_RIGHT_INSET
 
     def set_folder_action_order(self, order: list):
         self.folder_action_order = self.normalize_folder_action_order(order)

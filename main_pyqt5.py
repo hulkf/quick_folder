@@ -49,7 +49,7 @@ from typing import List, Tuple, Optional
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
 FOLDER_ACTION_MIME = "application/x-quick-folder-action"
-FOLDER_ACTION_SLOT_COUNT = 5
+FOLDER_ACTION_SLOT_COUNT = 4
 DEFAULT_FOLDER_ACTION_ORDER = [
     "open",
     "paste",
@@ -1532,10 +1532,13 @@ class QuickFolderPanel(QMainWindow):
         add_btn = QPushButton("📁 添加文件夹")
         add_btn.clicked.connect(self.add_folder)
         toolbar.addWidget(add_btn)
+        paste_btn = QPushButton("📋 粘贴文件夹")
+        paste_btn.clicked.connect(self.paste_folder_tab_folders)
+        toolbar.addWidget(paste_btn)
+        toolbar.addStretch()
         self.folder_action_palette_layout = QHBoxLayout()
         self.folder_action_palette_layout.setSpacing(4)
         toolbar.addLayout(self.folder_action_palette_layout)
-        toolbar.addStretch()
         layout.addLayout(toolbar)
         self.rebuild_folder_action_palette()
 
@@ -2329,6 +2332,8 @@ class QuickFolderPanel(QMainWindow):
         """从拖拽添加文件夹（添加到顶部）"""
         added = 0
         for path in paths:
+            if not os.path.isdir(path):
+                continue
             display_name = os.path.basename(path) or path
             # 检查是否已存在
             if not any(f["path"] == path for f in self.folders):
@@ -2341,6 +2346,48 @@ class QuickFolderPanel(QMainWindow):
         if added > 0:
             self.refresh_folder_list()
             self.save_config()
+
+    def clipboard_local_paths(self) -> list:
+        mime = QApplication.clipboard().mimeData()
+        paths = []
+        if mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if path:
+                        paths.append(path)
+        if mime.hasText():
+            paths.extend(self.parse_clipboard_paths(mime.text()))
+        normalized = []
+        seen = set()
+        for path in paths:
+            norm = os.path.normpath(os.path.expandvars(os.path.expanduser(path)))
+            key = os.path.normcase(norm)
+            if key not in seen:
+                seen.add(key)
+                normalized.append(norm)
+        return normalized
+
+    def parse_clipboard_paths(self, text: str) -> list:
+        paths = []
+        for raw in text.splitlines():
+            path = raw.strip().strip('"').strip("'")
+            if not path:
+                continue
+            path = os.path.expandvars(os.path.expanduser(path))
+            if os.path.exists(path):
+                paths.append(os.path.normpath(path))
+        return paths
+
+    def paste_folder_tab_folders(self):
+        folders = [p for p in self.clipboard_local_paths() if os.path.isdir(p)]
+        before = len(self.folders)
+        self.add_folders_from_drop(folders, is_common=True)
+        if len(self.folders) == before:
+            if folders:
+                QMessageBox.information(self, "提示", "剪贴板中没有新的文件夹")
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有文件夹数据")
 
     def move_folder_to_section(self, folder_data: dict, target_section: str, position: int):
         """将文件夹移动到指定分区"""
@@ -2526,11 +2573,37 @@ class QuickFolderPanel(QMainWindow):
 
     def extract_add_file_path(self, path: str):
         """添加文件到解压列表（由外部拖拽调用）"""
-        if os.path.isfile(path):
+        if os.path.isfile(path) and self.is_archive_file(path):
             display_name = os.path.basename(path)
             item = QListWidgetItem(f"📦 {display_name}  ({path})")
             item.setData(Qt.UserRole, path)
             self.extract_list.addItem(item)
+
+    def is_archive_file(self, path: str) -> bool:
+        return os.path.isfile(path) and os.path.basename(path).lower().endswith(ARCHIVE_EXTENSIONS)
+
+    def archive_files_from_paths(self, paths: list) -> list:
+        files = []
+        seen = set()
+        for path in paths:
+            candidates = []
+            if self.is_archive_file(path):
+                candidates = [path]
+            elif os.path.isdir(path):
+                try:
+                    candidates = [
+                        os.path.join(path, name)
+                        for name in os.listdir(path)
+                        if self.is_archive_file(os.path.join(path, name))
+                    ]
+                except Exception as e:
+                    print(f"读取压缩包文件夹失败: {path} -> {e}")
+            for candidate in candidates:
+                key = os.path.normcase(os.path.normpath(candidate))
+                if key not in seen:
+                    seen.add(key)
+                    files.append(os.path.normpath(candidate))
+        return files
 
     def closeEvent(self, event):
         """窗口关闭事件"""
@@ -2558,17 +2631,7 @@ class QuickFolderPanel(QMainWindow):
 
     def merge_paste_folders(self):
         """从剪贴板粘贴文件夹"""
-        clipboard = QApplication.clipboard()
-        mime = clipboard.mimeData()
-
-        paths = []
-        if mime.hasUrls():
-            for url in mime.urls():
-                path = url.toLocalFile()
-                if path and os.path.isdir(path):
-                    paths.append(path)
-        if mime.hasText():
-            paths.extend(self.parse_clipboard_folder_paths(mime.text()))
+        paths = [p for p in self.clipboard_local_paths() if os.path.isdir(p)]
 
         before = self.merge_list.count()
         for path in paths:
@@ -2581,15 +2644,7 @@ class QuickFolderPanel(QMainWindow):
                 QMessageBox.information(self, "提示", "剪贴板中没有文件夹数据")
 
     def parse_clipboard_folder_paths(self, text: str) -> list:
-        folders = []
-        for raw in text.splitlines():
-            path = raw.strip().strip('"').strip("'")
-            if not path:
-                continue
-            path = os.path.expandvars(os.path.expanduser(path))
-            if os.path.isdir(path):
-                folders.append(os.path.normpath(path))
-        return folders
+        return [p for p in self.parse_clipboard_paths(text) if os.path.isdir(p)]
 
     def merge_clear_list(self):
         """清空合并列表"""
@@ -2729,18 +2784,24 @@ class QuickFolderPanel(QMainWindow):
 
     def extract_paste_files(self):
         """从剪贴板粘贴文件"""
-        clipboard = QApplication.clipboard()
-        mime = clipboard.mimeData()
-
-        if mime.hasUrls():
-            for url in mime.urls():
-                if url.isLocalFile():
-                    file = url.toLocalFile()
-                    if os.path.isfile(file):
-                        display_name = os.path.basename(file)
-                        item = QListWidgetItem(f"📦 {display_name}  ({file})")
-                        item.setData(Qt.UserRole, file)
-                        self.extract_list.addItem(item)
+        files = self.archive_files_from_paths(self.clipboard_local_paths())
+        before = self.extract_list.count()
+        existing = {
+            os.path.normcase(os.path.normpath(self.extract_list.item(i).data(Qt.UserRole)))
+            for i in range(self.extract_list.count())
+            if self.extract_list.item(i).data(Qt.UserRole)
+        }
+        for file in files:
+            key = os.path.normcase(os.path.normpath(file))
+            if key not in existing:
+                self.extract_add_file_path(file)
+                existing.add(key)
+        added = self.extract_list.count() - before
+        if added == 0:
+            if files:
+                QMessageBox.information(self, "提示", "剪贴板中没有新的压缩包")
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有压缩包或包含压缩包的文件夹")
 
     def extract_clear(self):
         """清空解压列表"""

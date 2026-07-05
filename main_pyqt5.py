@@ -367,14 +367,14 @@ class DraggableListWidget(QListWidget):
 
 
 class FolderActionButton(QPushButton):
-    def __init__(self, action_id: str, theme: dict, parent=None):
+    def __init__(self, action_id: str, theme: dict, parent=None, width: int = None):
         super().__init__(FOLDER_ACTIONS.get(action_id, {}).get("label", action_id), parent)
         self.action_id = action_id
         self.theme = theme
         self.drag_start_pos = QPoint()
         self.dragging = False
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(FOLDER_ACTIONS.get(action_id, {}).get("width", 60), 30)
+        self.setFixedSize(width or FOLDER_ACTIONS.get(action_id, {}).get("width", 60), 30)
         self.setStyleSheet(self.button_style(theme))
 
     @staticmethod
@@ -988,6 +988,9 @@ class LaunchItemWidget(QWidget):
         self.running = False
         self.drag_start_pos = QPoint()
         self.dragging = False
+        self.close_click_timer = QTimer(self)
+        self.close_click_timer.setSingleShot(True)
+        self.close_click_timer.timeout.connect(self.emit_close_request)
         self.setCursor(Qt.PointingHandCursor)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
@@ -1051,17 +1054,23 @@ class LaunchItemWidget(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.running and not self.dragging:
-            self.close_requested.emit(self.item)
+            self.close_click_timer.start(QApplication.doubleClickInterval() + 40)
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
+            if self.close_click_timer.isActive():
+                self.close_click_timer.stop()
             self.launch_requested.emit(self.item)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def emit_close_request(self):
+        if self.running:
+            self.close_requested.emit(self.item)
 
     def show_context_menu(self, pos):
         menu = QMenu(self)
@@ -1640,8 +1649,13 @@ class QuickFolderPanel(QMainWindow):
         if hasattr(self, "folder_action_palette_box"):
             self.folder_action_palette_box.setFixedWidth(self.folder_action_area_width())
         visible_actions = set(self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT])
-        for action_id in [a for a in self.folder_action_order if a not in visible_actions]:
-            btn = FolderActionButton(action_id, self.theme)
+        slot_widths = [
+            FOLDER_ACTIONS.get(a, {}).get("width", 60)
+            for a in self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT]
+        ]
+        for index, action_id in enumerate([a for a in self.folder_action_order if a not in visible_actions]):
+            width = slot_widths[index] if index < len(slot_widths) else None
+            btn = FolderActionButton(action_id, self.theme, width=width)
             self.folder_action_palette_layout.addWidget(btn)
         self.folder_action_palette_layout.addStretch()
 

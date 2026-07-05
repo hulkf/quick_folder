@@ -1356,6 +1356,7 @@ class QuickFolderPanel(QMainWindow):
         # 文件夹列表
         self.merge_list = DraggableListWidget()
         self.merge_list.setDragDropMode(QListWidget.InternalMove)
+        self.merge_list.set_drop_callback(self.merge_add_folders_from_drop)
         layout.addWidget(self.merge_list, 1)
 
         # 输出目录
@@ -2158,6 +2159,11 @@ class QuickFolderPanel(QMainWindow):
             item.setData(Qt.UserRole, path)
             self.merge_list.addItem(item)
             self.update_merge_output_suggestion()
+
+    def merge_add_folders_from_drop(self, paths: list):
+        for path in paths:
+            if os.path.isdir(path):
+                self.merge_add_folder_path(path)
 
     def extract_add_file_path(self, path: str):
         """添加文件到解压列表（由外部拖拽调用）"""

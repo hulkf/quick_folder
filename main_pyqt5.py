@@ -1385,6 +1385,7 @@ class QuickFolderPanel(QMainWindow):
         self.merge_current_folder_check = QCheckBox("当前文件夹")
         self.merge_current_folder_check.setChecked(True)
         self.merge_current_folder_check.setStyleSheet(f"color: {self.theme['fg']};")
+        self.merge_current_folder_check.stateChanged.connect(lambda _: self.update_merge_output_suggestion())
         merge_check_layout.addWidget(self.merge_current_folder_check)
 
         merge_hint_label = QLabel("（建立一个合并文件的文件夹）")
@@ -2232,6 +2233,14 @@ class QuickFolderPanel(QMainWindow):
             self.merge_output_entry.clear()
             return
 
+        output = self.suggest_merge_output_dir()
+        if output:
+            self.merge_output_entry.setText(output)
+        else:
+            self.merge_output_entry.clear()
+
+    def suggest_merge_output_dir(self) -> str:
+        """根据当前合并列表和选项生成默认输出目录"""
         dirs = set()
         for i in range(self.merge_list.count()):
             path = self.merge_list.item(i).data(Qt.UserRole)
@@ -2239,9 +2248,15 @@ class QuickFolderPanel(QMainWindow):
                 dirs.add(os.path.dirname(path))
 
         if len(dirs) == 1:
-            self.merge_output_entry.setText(dirs.pop())
+            parent_dir = dirs.pop()
+        elif self.merge_list.count() > 0:
+            first_path = self.merge_list.item(0).data(Qt.UserRole)
+            parent_dir = os.path.dirname(first_path) if first_path else os.getcwd()
         else:
-            self.merge_output_entry.clear()
+            parent_dir = os.getcwd()
+        if self.merge_current_folder_check.isChecked():
+            return os.path.join(parent_dir, "合并文件")
+        return parent_dir
 
     def merge_select_output(self):
         """选择输出目录"""
@@ -2258,21 +2273,13 @@ class QuickFolderPanel(QMainWindow):
         output = self.merge_output_entry.text().strip()
         if not output:
             # 没有指定输出目录
-            if self.merge_current_folder_check.isChecked():
-                # 勾选了"当前文件夹"，在第一个文件夹的父目录下创建"合并文件"文件夹
-                first_path = self.merge_list.item(0).data(Qt.UserRole)
-                if first_path:
-                    parent_dir = os.path.dirname(first_path)
-                    output = os.path.join(parent_dir, "合并文件")
-                else:
-                    output = os.path.join(os.getcwd(), "合并文件")
-            else:
-                # 未勾选，使用第一个文件夹的父目录
-                first_path = self.merge_list.item(0).data(Qt.UserRole)
-                if first_path:
-                    output = os.path.dirname(first_path)
-                else:
-                    output = os.getcwd()
+            output = self.suggest_merge_output_dir()
+        elif self.merge_current_folder_check.isChecked():
+            # 兼容旧状态：如果输出框里还是源文件夹父目录，勾选时改为父目录下的"合并文件"。
+            first_path = self.merge_list.item(0).data(Qt.UserRole)
+            parent_dir = os.path.dirname(first_path) if first_path else os.getcwd()
+            if os.path.normcase(os.path.normpath(output)) == os.path.normcase(os.path.normpath(parent_dir)):
+                output = os.path.join(parent_dir, "合并文件")
 
         # 确保输出目录存在
         os.makedirs(output, exist_ok=True)

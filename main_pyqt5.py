@@ -70,6 +70,8 @@ FOLDER_ACTIONS = {
     "new_folder": {"label": "新建", "width": 50},
     "remove_prefix": {"label": "删前缀", "width": 60},
 }
+FOLDER_DELETE_BUTTON_WIDTH = 34
+FOLDER_ACTION_BUTTON_SPACING = 4
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
     ".tar.xz", ".txz", ".gz", ".bz2", ".xz", ".lz", ".lzma", ".zst",
@@ -551,7 +553,7 @@ class FolderItemWidget(QWidget):
         button_box.setStyleSheet("background: transparent;")
         button_layout = QHBoxLayout(button_box)
         button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(4)
+        button_layout.setSpacing(FOLDER_ACTION_BUTTON_SPACING)
 
         # 右侧：可配置功能按钮，删除按钮固定保留
         for slot_index, action_id in enumerate(self.action_order[:FOLDER_ACTION_SLOT_COUNT]):
@@ -561,7 +563,7 @@ class FolderItemWidget(QWidget):
             button_layout.addWidget(btn)
 
         del_btn = QPushButton("🗑")
-        del_btn.setFixedSize(34, 30)
+        del_btn.setFixedSize(FOLDER_DELETE_BUTTON_WIDTH, 30)
         del_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {theme['btn_bg']};
@@ -1351,6 +1353,13 @@ class QuickFolderPanel(QMainWindow):
         parts = re.split(r"[\n,;，；]+", text)
         return [p.strip() for p in parts if p.strip()]
 
+    def folder_action_area_width(self) -> int:
+        actions = self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT]
+        action_width = sum(FOLDER_ACTIONS.get(a, {}).get("width", 60) for a in actions)
+        button_count = len(actions) + 1
+        spacing_width = FOLDER_ACTION_BUTTON_SPACING * max(0, button_count - 1)
+        return action_width + FOLDER_DELETE_BUTTON_WIDTH + spacing_width
+
     def set_folder_action_order(self, order: list):
         self.folder_action_order = self.normalize_folder_action_order(order)
         self.save_config()
@@ -1536,9 +1545,13 @@ class QuickFolderPanel(QMainWindow):
         paste_btn.clicked.connect(self.paste_folder_tab_folders)
         toolbar.addWidget(paste_btn)
         toolbar.addStretch()
+        self.folder_action_palette_box = QWidget()
+        self.folder_action_palette_box.setFixedWidth(self.folder_action_area_width())
         self.folder_action_palette_layout = QHBoxLayout()
+        self.folder_action_palette_box.setLayout(self.folder_action_palette_layout)
         self.folder_action_palette_layout.setSpacing(4)
-        toolbar.addLayout(self.folder_action_palette_layout)
+        self.folder_action_palette_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar.addWidget(self.folder_action_palette_box)
         layout.addLayout(toolbar)
         self.rebuild_folder_action_palette()
 
@@ -1623,10 +1636,13 @@ class QuickFolderPanel(QMainWindow):
             child = self.folder_action_palette_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        for action_id in self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT]:
+        if hasattr(self, "folder_action_palette_box"):
+            self.folder_action_palette_box.setFixedWidth(self.folder_action_area_width())
+        visible_actions = set(self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT])
+        for action_id in [a for a in self.folder_action_order if a not in visible_actions]:
             btn = FolderActionButton(action_id, self.theme)
             self.folder_action_palette_layout.addWidget(btn)
-        self.folder_action_palette_layout.addSpacing(38)
+        self.folder_action_palette_layout.addStretch()
 
     def create_launch_tab(self) -> QWidget:
         tab = QWidget()

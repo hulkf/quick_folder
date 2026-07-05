@@ -2203,24 +2203,35 @@ class QuickFolderPanel(QMainWindow):
         clipboard = QApplication.clipboard()
         mime = clipboard.mimeData()
 
+        paths = []
         if mime.hasUrls():
-            added = 0
             for url in mime.urls():
                 path = url.toLocalFile()
                 if path and os.path.isdir(path):
-                    display_name = os.path.basename(path) or path
-                    if not any(self.merge_list.item(i).data(Qt.UserRole, None) == path
-                              for i in range(self.merge_list.count())):
-                        item = QListWidgetItem(f"📁 {display_name}  ({path})")
-                        item.setData(Qt.UserRole, path)
-                        self.merge_list.addItem(item)
-                        added += 1
-            if added > 0:
-                self.update_merge_output_suggestion()
-            else:
+                    paths.append(path)
+        if mime.hasText():
+            paths.extend(self.parse_clipboard_folder_paths(mime.text()))
+
+        before = self.merge_list.count()
+        for path in paths:
+            self.merge_add_folder_path(path)
+        added = self.merge_list.count() - before
+        if added == 0:
+            if paths:
                 QMessageBox.information(self, "提示", "剪贴板中没有新的文件夹")
-        else:
-            QMessageBox.information(self, "提示", "剪贴板中没有文件夹数据")
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有文件夹数据")
+
+    def parse_clipboard_folder_paths(self, text: str) -> list:
+        folders = []
+        for raw in text.splitlines():
+            path = raw.strip().strip('"').strip("'")
+            if not path:
+                continue
+            path = os.path.expandvars(os.path.expanduser(path))
+            if os.path.isdir(path):
+                folders.append(os.path.normpath(path))
+        return folders
 
     def merge_clear_list(self):
         """清空合并列表"""

@@ -29,7 +29,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import (
     QFont, QColor, QPalette, QIcon, QPixmap, QPainter,
     QDragEnterEvent, QDropEvent, QMouseEvent, QCursor,
-    QLinearGradient, QBrush, QPen, QFontMetrics
+    QLinearGradient, QBrush, QPen, QFontMetrics, QDrag
 )
 import json
 import os
@@ -607,6 +607,7 @@ class FolderItemWidget(QWidget):
 
 class LaunchGridArea(QWidget):
     files_dropped = pyqtSignal(list)
+    item_dropped = pyqtSignal(int, int)
 
     def __init__(self, theme: dict, parent=None):
         super().__init__(parent)
@@ -617,18 +618,33 @@ class LaunchGridArea(QWidget):
         self.setStyleSheet(f"background-color: {theme['item_bg']}; border: 1px solid {theme['border']}; border-radius: 4px;")
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-quick-folder-launch-index"):
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-quick-folder-launch-index"):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        if event.mimeData().hasFormat("application/x-quick-folder-launch-index"):
+            try:
+                from_index = int(bytes(event.mimeData().data("application/x-quick-folder-launch-index")).decode("utf-8"))
+                self.item_dropped.emit(from_index, self.cell_index_at(event.pos()))
+                event.acceptProposedAction()
+                return
+            except Exception:
+                pass
         paths = [u.toLocalFile() for u in event.mimeData().urls() if u.toLocalFile() and os.path.isfile(u.toLocalFile())]
         if paths:
             self.files_dropped.emit(paths)
             event.acceptProposedAction()
+
+    def cell_index_at(self, pos: QPoint) -> int:
+        cols, cell_h = 4, 102
+        cell_w = max(1, self.width() // cols)
+        col = max(0, min(cols - 1, pos.x() // cell_w))
+        row = max(0, pos.y() // cell_h)
+        return int(row * cols + col)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -695,6 +711,8 @@ class LaunchItemWidget(QWidget):
         self.item = item
         self.theme = theme
         self.running = False
+        self.drag_start_pos = QPoint()
+        self.dragging = False
         self.setCursor(Qt.PointingHandCursor)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
@@ -733,11 +751,35 @@ class LaunchItemWidget(QWidget):
         self.name_label.setStyleSheet(f"color: {'white' if running else self.theme['fg']}; background: transparent;")
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.running:
-            self.close_requested.emit(self.item)
+        if event.button() == Qt.LeftButton:
+            self.drag_start_pos = event.pos()
+            self.dragging = False
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.pos() - self.drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+        self.dragging = True
+        mime = QMimeData()
+        mime.setData("application/x-quick-folder-launch-index", str(self.item.get("_grid_index", -1)).encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(event.pos())
+        drag.exec_(Qt.MoveAction)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.running and not self.dragging:
+            self.close_requested.emit(self.item)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -1266,6 +1308,7 @@ class QuickFolderPanel(QMainWindow):
         self.launch_scroll.setFrameShape(QFrame.NoFrame)
         self.launch_grid_host = LaunchGridArea(self.theme)
         self.launch_grid_host.files_dropped.connect(self.add_launch_items_from_drop)
+        self.launch_grid_host.item_dropped.connect(self.reorder_launch_item)
         self.launch_grid = QGridLayout(self.launch_grid_host)
         self.launch_grid.setContentsMargins(0, 0, 0, 0)
         self.launch_grid.setSpacing(0)
@@ -1701,6 +1744,7 @@ class QuickFolderPanel(QMainWindow):
         self.launch_grid_host.setMinimumHeight(visible_rows * 102)
         self.launch_grid_host.setMaximumHeight(16777215)
         for index, item in enumerate(self.launch_items):
+            item["_grid_index"] = index
             cell = LaunchCellWidget(self.theme, index=index)
             tile = LaunchItemWidget(item, self.theme)
             tile.launch_requested.connect(self.launch_item)
@@ -1713,6 +1757,21 @@ class QuickFolderPanel(QMainWindow):
         for index in range(len(self.launch_items), visible_cells):
             self.launch_grid.addWidget(LaunchCellWidget(self.theme, index=index), index // cols, index % cols)
         self.launch_empty_label.setVisible(len(self.launch_items) == 0)
+
+    def reorder_launch_item(self, from_index: int, to_index: int):
+        if from_index < 0 or from_index >= len(self.launch_items):
+            return
+        if to_index < 0:
+            return
+        if to_index >= len(self.launch_items):
+            item = self.launch_items.pop(from_index)
+            self.launch_items.append(item)
+        elif from_index != to_index:
+            self.launch_items[from_index], self.launch_items[to_index] = self.launch_items[to_index], self.launch_items[from_index]
+        else:
+            return
+        self.refresh_launch_grid()
+        self.save_config()
 
     def add_launch_item(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择应用或脚本", "", "可启动文件 (*.exe *.bat *.cmd *.lnk *.ps1);;所有文件 (*)")

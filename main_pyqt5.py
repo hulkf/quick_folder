@@ -61,23 +61,34 @@ DEFAULT_FOLDER_ACTION_ORDER = [
     "remove_prefix",
 ]
 FOLDER_ACTIONS = {
-    "open": {"label": "打开", "width": 50},
-    "paste": {"label": "粘贴", "width": 50},
-    "reorder": {"label": "重排序", "width": 65},
-    "rename": {"label": "重命名", "width": 65},
-    "delete_archives": {"label": "删除zip", "width": 70},
-    "classify": {"label": "分类", "width": 50},
-    "new_folder": {"label": "新建", "width": 50},
-    "remove_prefix": {"label": "删前缀", "width": 60},
+    "open": {"label": "打开"},
+    "paste": {"label": "粘贴"},
+    "reorder": {"label": "重排序"},
+    "rename": {"label": "重命名"},
+    "delete_archives": {"label": "删除zip"},
+    "classify": {"label": "分类"},
+    "new_folder": {"label": "新建"},
+    "remove_prefix": {"label": "删前缀"},
 }
 FOLDER_DELETE_BUTTON_WIDTH = 34
 FOLDER_ACTION_BUTTON_SPACING = 4
 FOLDER_ACTION_ROW_RIGHT_INSET = 28
+FOLDER_ACTION_MIN_WIDTH = 50
+FOLDER_ACTION_HORIZONTAL_PADDING = 26
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
     ".tar.xz", ".txz", ".gz", ".bz2", ".xz", ".lz", ".lzma", ".zst",
     ".cab", ".iso", ".jar", ".war",
 )
+
+
+def folder_action_label(action_id: str) -> str:
+    return FOLDER_ACTIONS.get(action_id, {}).get("label", action_id)
+
+
+def folder_action_button_width(action_id: str, font: QFont = None) -> int:
+    metrics = QFontMetrics(font or QFont("Segoe UI", 9))
+    return max(FOLDER_ACTION_MIN_WIDTH, metrics.horizontalAdvance(folder_action_label(action_id)) + FOLDER_ACTION_HORIZONTAL_PADDING)
 
 # ----- 主题定义 -----
 THEMES = {
@@ -367,14 +378,14 @@ class DraggableListWidget(QListWidget):
 
 
 class FolderActionButton(QPushButton):
-    def __init__(self, action_id: str, theme: dict, parent=None, width: int = None):
-        super().__init__(FOLDER_ACTIONS.get(action_id, {}).get("label", action_id), parent)
+    def __init__(self, action_id: str, theme: dict, parent=None):
+        super().__init__(folder_action_label(action_id), parent)
         self.action_id = action_id
         self.theme = theme
         self.drag_start_pos = QPoint()
         self.dragging = False
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(width or FOLDER_ACTIONS.get(action_id, {}).get("width", 60), 30)
+        self.setFixedSize(folder_action_button_width(action_id, self.font()), 30)
         self.setStyleSheet(self.button_style(theme))
 
     @staticmethod
@@ -1365,7 +1376,7 @@ class QuickFolderPanel(QMainWindow):
 
     def folder_action_area_width(self) -> int:
         actions = self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT]
-        action_width = sum(FOLDER_ACTIONS.get(a, {}).get("width", 60) for a in actions)
+        action_width = sum(folder_action_button_width(a) for a in actions)
         button_count = len(actions) + 1
         spacing_width = FOLDER_ACTION_BUTTON_SPACING * max(0, button_count - 1)
         return action_width + FOLDER_DELETE_BUTTON_WIDTH + spacing_width + FOLDER_ACTION_ROW_RIGHT_INSET
@@ -1649,13 +1660,8 @@ class QuickFolderPanel(QMainWindow):
         if hasattr(self, "folder_action_palette_box"):
             self.folder_action_palette_box.setFixedWidth(self.folder_action_area_width())
         visible_actions = set(self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT])
-        slot_widths = [
-            FOLDER_ACTIONS.get(a, {}).get("width", 60)
-            for a in self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT]
-        ]
-        for index, action_id in enumerate([a for a in self.folder_action_order if a not in visible_actions]):
-            width = slot_widths[index] if index < len(slot_widths) else None
-            btn = FolderActionButton(action_id, self.theme, width=width)
+        for action_id in [a for a in self.folder_action_order if a not in visible_actions]:
+            btn = FolderActionButton(action_id, self.theme)
             self.folder_action_palette_layout.addWidget(btn)
         self.folder_action_palette_layout.addStretch()
 

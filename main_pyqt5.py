@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QDialog, QLineEdit,
     QGroupBox, QFrame, QSplitter, QMenu, QAction, QSystemTrayIcon,
     QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox, QCheckBox,
-    QGridLayout, QInputDialog, QFileIconProvider
+    QGridLayout, QInputDialog, QFileIconProvider, QPlainTextEdit
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
@@ -47,6 +47,34 @@ from typing import List, Tuple, Optional
 # 配置
 # ============================================================
 CONFIG_FILE = Path(__file__).parent / "config.json"
+
+FOLDER_ACTION_MIME = "application/x-quick-folder-action"
+FOLDER_ACTION_SLOT_COUNT = 5
+DEFAULT_FOLDER_ACTION_ORDER = [
+    "open",
+    "paste",
+    "reorder",
+    "rename",
+    "new_folder",
+    "delete_archives",
+    "classify",
+    "remove_prefix",
+]
+FOLDER_ACTIONS = {
+    "open": {"label": "打开", "width": 50},
+    "paste": {"label": "粘贴", "width": 50},
+    "reorder": {"label": "重排序", "width": 65},
+    "rename": {"label": "重命名", "width": 65},
+    "delete_archives": {"label": "删除zip", "width": 70},
+    "classify": {"label": "分类", "width": 50},
+    "new_folder": {"label": "新建", "width": 50},
+    "remove_prefix": {"label": "删前缀", "width": 60},
+}
+ARCHIVE_EXTENSIONS = (
+    ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
+    ".tar.xz", ".txz", ".gz", ".bz2", ".xz", ".lz", ".lzma", ".zst",
+    ".cab", ".iso", ".jar", ".war",
+)
 
 # ----- 主题定义 -----
 THEMES = {
@@ -335,22 +363,159 @@ class DraggableListWidget(QListWidget):
             super().dropEvent(event)
 
 
+class FolderActionButton(QPushButton):
+    def __init__(self, action_id: str, theme: dict, parent=None):
+        super().__init__(FOLDER_ACTIONS.get(action_id, {}).get("label", action_id), parent)
+        self.action_id = action_id
+        self.theme = theme
+        self.drag_start_pos = QPoint()
+        self.dragging = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(FOLDER_ACTIONS.get(action_id, {}).get("width", 60), 30)
+        self.setStyleSheet(self.button_style(theme))
+
+    @staticmethod
+    def button_style(theme: dict) -> str:
+        return f"""
+            QPushButton {{
+                background-color: {theme['btn_bg']};
+                color: {theme['fg']};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: white;
+            }}
+        """
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_start_pos = event.pos()
+            self.dragging = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.pos() - self.drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+        self.dragging = True
+        mime = QMimeData()
+        mime.setData(FOLDER_ACTION_MIME, self.action_id.encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(event.pos())
+        drag.exec_(Qt.MoveAction)
+
+    def mouseReleaseEvent(self, event):
+        if self.dragging:
+            self.dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class FolderActionSlotButton(FolderActionButton):
+    action_dropped = pyqtSignal(int, str)
+
+    def __init__(self, action_id: str, slot_index: int, theme: dict, parent=None):
+        super().__init__(action_id, theme, parent)
+        self.slot_index = slot_index
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(FOLDER_ACTION_MIME):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(FOLDER_ACTION_MIME):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(FOLDER_ACTION_MIME):
+            action_id = bytes(event.mimeData().data(FOLDER_ACTION_MIME)).decode("utf-8")
+            self.action_dropped.emit(self.slot_index, action_id)
+            event.acceptProposedAction()
+
+
+class FolderActionOrderWidget(QWidget):
+    order_changed = pyqtSignal(list)
+
+    def __init__(self, theme: dict, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.order = []
+        self.setAcceptDrops(True)
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(6)
+
+    def set_order(self, order: list):
+        self.order = list(order)
+        self.rebuild()
+
+    def rebuild(self):
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        for index, action_id in enumerate(self.order):
+            btn = FolderActionSlotButton(action_id, index, self.theme)
+            btn.action_dropped.connect(self.move_action_to_slot)
+            self.layout.addWidget(btn)
+        self.layout.addStretch()
+
+    def move_action_to_slot(self, slot_index: int, action_id: str):
+        order = [a for a in self.order if a in FOLDER_ACTIONS]
+        if action_id not in FOLDER_ACTIONS:
+            return
+        if action_id in order:
+            order.remove(action_id)
+        slot_index = max(0, min(slot_index, len(order)))
+        order.insert(slot_index, action_id)
+        self.order = order
+        self.rebuild()
+        self.order_changed.emit(self.order)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(FOLDER_ACTION_MIME):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(FOLDER_ACTION_MIME):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(FOLDER_ACTION_MIME):
+            action_id = bytes(event.mimeData().data(FOLDER_ACTION_MIME)).decode("utf-8")
+            self.move_action_to_slot(len(self.order), action_id)
+            event.acceptProposedAction()
+
+
 class FolderItemWidget(QWidget):
     """文件夹项组件"""
     # 信号：删除请求
     delete_requested = pyqtSignal(str)
     section_toggled = pyqtSignal(str, bool)
     rename_requested = pyqtSignal(str, str)
+    action_slot_replaced = pyqtSignal(int, str)
     clicked = pyqtSignal()
 
     _current_selected = None
 
-    def __init__(self, path: str, display_name: str, is_common: bool, theme: dict, parent=None):
+    def __init__(self, path: str, display_name: str, is_common: bool, theme: dict,
+                 action_order: list = None, remove_prefixes: list = None, parent=None):
         super().__init__(parent)
         self.path = path
         self.display_name = display_name
         self.is_common = is_common
         self.theme = theme
+        self.action_order = action_order or DEFAULT_FOLDER_ACTION_ORDER
+        self.remove_prefixes = remove_prefixes or []
         self._name_full_text = display_name
         self._selected = False
         self._normal_bg = theme['item_bg']
@@ -388,43 +553,12 @@ class FolderItemWidget(QWidget):
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(4)
 
-        # 右侧：按钮
-        btn_style = f"""
-            QPushButton {{
-                background-color: {theme['btn_bg']};
-                color: {theme['fg']};
-                border: none;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['accent']};
-                color: white;
-            }}
-        """
-
-        open_btn = QPushButton("打开")
-        open_btn.setFixedSize(50, 30)
-        open_btn.setStyleSheet(btn_style)
-        open_btn.clicked.connect(lambda: self.open_folder())
-        button_layout.addWidget(open_btn)
-
-        paste_btn = QPushButton("粘贴")
-        paste_btn.setFixedSize(50, 30)
-        paste_btn.setStyleSheet(btn_style)
-        paste_btn.clicked.connect(lambda: self.paste_to())
-        button_layout.addWidget(paste_btn)
-
-        reorder_btn = QPushButton("重排序")
-        reorder_btn.setFixedSize(65, 30)
-        reorder_btn.setStyleSheet(btn_style)
-        reorder_btn.clicked.connect(lambda: self.reorder_files())
-        button_layout.addWidget(reorder_btn)
-
-        rename_btn = QPushButton("重命名")
-        rename_btn.setFixedSize(65, 30)
-        rename_btn.setStyleSheet(btn_style)
-        rename_btn.clicked.connect(lambda: self.rename_folder())
-        button_layout.addWidget(rename_btn)
+        # 右侧：可配置功能按钮，删除按钮固定保留
+        for slot_index, action_id in enumerate(self.action_order[:FOLDER_ACTION_SLOT_COUNT]):
+            btn = FolderActionSlotButton(action_id, slot_index, theme)
+            btn.clicked.connect(lambda checked=False, aid=action_id: self.run_action(aid))
+            btn.action_dropped.connect(self.action_slot_replaced)
+            button_layout.addWidget(btn)
 
         del_btn = QPushButton("🗑")
         del_btn.setFixedSize(34, 30)
@@ -501,6 +635,21 @@ class FolderItemWidget(QWidget):
         else:
             QMessageBox.warning(self, "提示", f"文件夹不存在:\n{self.path}")
 
+    def run_action(self, action_id: str):
+        actions = {
+            "open": self.open_folder,
+            "paste": self.paste_to,
+            "reorder": self.reorder_files,
+            "rename": self.rename_folder,
+            "delete_archives": self.delete_archive_files,
+            "classify": self.classify_files,
+            "new_folder": self.create_child_folder,
+            "remove_prefix": self.remove_file_prefixes,
+        }
+        action = actions.get(action_id)
+        if action:
+            action()
+
     def rename_folder(self):
         """重命名文件夹（实际文件夹和显示名称）"""
         from PyQt5.QtWidgets import QInputDialog
@@ -511,6 +660,129 @@ class FolderItemWidget(QWidget):
         )
         if ok and new_name.strip():
             self.rename_requested.emit(self.path, new_name.strip())
+
+    def ensure_folder_exists(self) -> bool:
+        if os.path.isdir(self.path):
+            return True
+        QMessageBox.warning(self, "提示", f"文件夹不存在:\n{self.path}")
+        return False
+
+    def delete_archive_files(self):
+        if not self.ensure_folder_exists():
+            return
+        archives = []
+        for name in os.listdir(self.path):
+            full_path = os.path.join(self.path, name)
+            lower_name = name.lower()
+            if os.path.isfile(full_path) and lower_name.endswith(ARCHIVE_EXTENSIONS):
+                archives.append(full_path)
+        if not archives:
+            QMessageBox.information(self, "提示", "文件夹内没有压缩包")
+            return
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"将删除 {len(archives)} 个压缩包文件。\n\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        deleted, errors = 0, 0
+        for file_path in archives:
+            try:
+                os.remove(file_path)
+                deleted += 1
+            except Exception as e:
+                errors += 1
+                print(f"删除压缩包失败: {file_path} -> {e}")
+        msg = f"已删除 {deleted} 个压缩包"
+        if errors:
+            msg += f"\n{errors} 个压缩包删除失败"
+        QMessageBox.information(self, "完成", msg)
+
+    def classify_files(self):
+        if not self.ensure_folder_exists():
+            return
+        files = [
+            os.path.join(self.path, name)
+            for name in os.listdir(self.path)
+            if os.path.isfile(os.path.join(self.path, name))
+        ]
+        if not files:
+            QMessageBox.information(self, "提示", "文件夹内没有文件")
+            return
+        moved, errors = 0, 0
+        for file_path in files:
+            name = os.path.basename(file_path)
+            ext = os.path.splitext(name)[1].lower().lstrip(".") or "无后缀"
+            target_dir = os.path.join(self.path, ext)
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                dst = os.path.join(target_dir, name)
+                if os.path.abspath(dst) == os.path.abspath(file_path):
+                    continue
+                if os.path.exists(dst):
+                    base, suffix = os.path.splitext(dst)
+                    counter = 1
+                    while os.path.exists(f"{base}_{counter}{suffix}"):
+                        counter += 1
+                    dst = f"{base}_{counter}{suffix}"
+                shutil.move(file_path, dst)
+                moved += 1
+            except Exception as e:
+                errors += 1
+                print(f"分类失败: {file_path} -> {e}")
+        msg = f"已分类 {moved} 个文件"
+        if errors:
+            msg += f"\n{errors} 个文件分类失败"
+        QMessageBox.information(self, "完成", msg)
+
+    def create_child_folder(self):
+        if not self.ensure_folder_exists():
+            return
+        name, ok = QInputDialog.getText(self, "新建文件夹", "输入文件夹名称:", text="新建文件夹")
+        if not ok or not name.strip():
+            return
+        new_path = os.path.join(self.path, name.strip())
+        try:
+            os.makedirs(new_path, exist_ok=False)
+            QMessageBox.information(self, "完成", f"已新建文件夹:\n{new_path}")
+        except FileExistsError:
+            QMessageBox.warning(self, "提示", "同名文件夹已存在")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"新建文件夹失败:\n{e}")
+
+    def remove_file_prefixes(self):
+        if not self.ensure_folder_exists():
+            return
+        prefixes = [p for p in self.remove_prefixes if p]
+        if not prefixes:
+            QMessageBox.information(self, "提示", "请先在设置中配置要删除的前缀")
+            return
+        renamed, errors = 0, 0
+        for name in os.listdir(self.path):
+            old_path = os.path.join(self.path, name)
+            if not os.path.isfile(old_path):
+                continue
+            matched = next((prefix for prefix in prefixes if name.startswith(prefix)), "")
+            if not matched:
+                continue
+            new_name = name[len(matched):]
+            if not new_name:
+                continue
+            new_path = os.path.join(self.path, new_name)
+            if os.path.exists(new_path):
+                errors += 1
+                continue
+            try:
+                os.rename(old_path, new_path)
+                renamed += 1
+            except Exception as e:
+                errors += 1
+                print(f"删除前缀失败: {old_path} -> {e}")
+        msg = f"已处理 {renamed} 个文件"
+        if errors:
+            msg += f"\n{errors} 个文件处理失败"
+        QMessageBox.information(self, "完成", msg)
 
     def paste_to(self):
         """粘贴剪贴板中的文件到此文件夹"""
@@ -976,6 +1248,8 @@ class QuickFolderPanel(QMainWindow):
         self.config = self.load_config()
         self.theme_name = self.config.get("theme", "dark_teal")
         self.theme = THEMES.get(self.theme_name, THEMES["dark_teal"])
+        self.folder_action_order = self.normalize_folder_action_order(self.config.get("folder_action_order"))
+        self.folder_remove_prefixes = self.parse_prefix_config(self.config.get("folder_remove_prefixes", ""))
         self.launch_items = self.load_launch_items()
         self.launch_processes = {}
         self.launch_tiles = {}
@@ -1019,6 +1293,10 @@ class QuickFolderPanel(QMainWindow):
                 "merge_delete_source_folders": self.merge_delete_source_check.isChecked()
                     if hasattr(self, "merge_delete_source_check")
                     else self.config.get("merge_delete_source_folders", False),
+                "folder_action_order": self.folder_action_order,
+                "folder_remove_prefixes": self.folder_prefix_entry.toPlainText()
+                    if hasattr(self, "folder_prefix_entry")
+                    else self.config.get("folder_remove_prefixes", ""),
                 "folder_sections_collapsed": {
                     "common": self.common_group.isChecked() is False
                         if hasattr(self, "common_group")
@@ -1053,6 +1331,50 @@ class QuickFolderPanel(QMainWindow):
             x = (screen.width() - self.width()) // 2
             y = (screen.height() - self.height()) // 4
             self.move(x, y)
+
+    def normalize_folder_action_order(self, raw_order=None) -> list:
+        order = []
+        for action_id in raw_order or []:
+            if action_id in FOLDER_ACTIONS and action_id not in order:
+                order.append(action_id)
+        for action_id in DEFAULT_FOLDER_ACTION_ORDER:
+            if action_id not in order:
+                order.append(action_id)
+        for action_id in FOLDER_ACTIONS:
+            if action_id not in order:
+                order.append(action_id)
+        return order
+
+    def parse_prefix_config(self, text: str) -> list:
+        if not text:
+            return []
+        parts = re.split(r"[\n,;，；]+", text)
+        return [p.strip() for p in parts if p.strip()]
+
+    def set_folder_action_order(self, order: list):
+        self.folder_action_order = self.normalize_folder_action_order(order)
+        self.save_config()
+        if hasattr(self, "folder_action_order_widget"):
+            self.folder_action_order_widget.set_order(self.folder_action_order)
+        if hasattr(self, "folder_action_palette_layout"):
+            self.rebuild_folder_action_palette()
+        if hasattr(self, "common_list"):
+            self.refresh_folder_list()
+
+    def move_folder_action_to_slot(self, slot_index: int, action_id: str):
+        order = [a for a in self.folder_action_order if a in FOLDER_ACTIONS]
+        if action_id not in FOLDER_ACTIONS:
+            return
+        if action_id in order:
+            order.remove(action_id)
+        slot_index = max(0, min(slot_index, FOLDER_ACTION_SLOT_COUNT - 1, len(order)))
+        order.insert(slot_index, action_id)
+        self.set_folder_action_order(order)
+
+    def on_folder_prefixes_changed(self):
+        if hasattr(self, "folder_prefix_entry"):
+            self.folder_remove_prefixes = self.parse_prefix_config(self.folder_prefix_entry.toPlainText())
+            self.save_config()
 
     def init_ui(self):
         """初始化用户界面"""
@@ -1210,8 +1532,12 @@ class QuickFolderPanel(QMainWindow):
         add_btn = QPushButton("📁 添加文件夹")
         add_btn.clicked.connect(self.add_folder)
         toolbar.addWidget(add_btn)
+        self.folder_action_palette_layout = QHBoxLayout()
+        self.folder_action_palette_layout.setSpacing(4)
+        toolbar.addLayout(self.folder_action_palette_layout)
         toolbar.addStretch()
         layout.addLayout(toolbar)
+        self.rebuild_folder_action_palette()
 
         # 分区：常用
         self.common_group = QGroupBox("⭐ 常用")
@@ -1286,6 +1612,17 @@ class QuickFolderPanel(QMainWindow):
         layout.addWidget(self.empty_label)
 
         return tab
+
+    def rebuild_folder_action_palette(self):
+        if not hasattr(self, "folder_action_palette_layout"):
+            return
+        while self.folder_action_palette_layout.count():
+            child = self.folder_action_palette_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        for action_id in ("delete_archives", "classify", "new_folder", "remove_prefix"):
+            btn = FolderActionButton(action_id, self.theme)
+            self.folder_action_palette_layout.addWidget(btn)
 
     def create_launch_tab(self) -> QWidget:
         tab = QWidget()
@@ -1560,6 +1897,24 @@ class QuickFolderPanel(QMainWindow):
         startup_hint.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
         system_layout.addWidget(startup_hint)
         layout.addWidget(system_group)
+
+        folder_actions_group = QGroupBox("文件夹功能项")
+        folder_actions_layout = QVBoxLayout(folder_actions_group)
+        self.folder_action_order_widget = FolderActionOrderWidget(self.theme)
+        self.folder_action_order_widget.set_order(self.folder_action_order)
+        self.folder_action_order_widget.order_changed.connect(self.set_folder_action_order)
+        folder_actions_layout.addWidget(self.folder_action_order_widget)
+
+        prefix_label = QLabel("删前缀配置:")
+        prefix_label.setStyleSheet(f"color: {self.theme['fg']};")
+        folder_actions_layout.addWidget(prefix_label)
+        self.folder_prefix_entry = QPlainTextEdit()
+        self.folder_prefix_entry.setFixedHeight(70)
+        self.folder_prefix_entry.setPlaceholderText("每行一个前缀，也可用逗号或分号分隔")
+        self.folder_prefix_entry.setPlainText(self.config.get("folder_remove_prefixes", ""))
+        self.folder_prefix_entry.textChanged.connect(self.on_folder_prefixes_changed)
+        folder_actions_layout.addWidget(self.folder_prefix_entry)
+        layout.addWidget(folder_actions_group)
         layout.addStretch()
 
         # 关于
@@ -1881,12 +2236,15 @@ class QuickFolderPanel(QMainWindow):
                 folder["path"],
                 folder["display_name"],
                 folder["is_common"],
-                self.theme
+                self.theme,
+                self.folder_action_order,
+                self.folder_remove_prefixes
             )
             # 连接信号
             widget.delete_requested.connect(self.remove_folder)
             widget.section_toggled.connect(self.toggle_section)
             widget.rename_requested.connect(self.rename_folder)
+            widget.action_slot_replaced.connect(self.move_folder_action_to_slot)
 
             item = QListWidgetItem()
             item.setSizeHint(widget.sizeHint() + QSize(0, 10))

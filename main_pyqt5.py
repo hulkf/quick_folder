@@ -1623,9 +1623,10 @@ class QuickFolderPanel(QMainWindow):
             child = self.folder_action_palette_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        for action_id in ("delete_archives", "classify", "new_folder", "remove_prefix"):
+        for action_id in self.folder_action_order[:FOLDER_ACTION_SLOT_COUNT]:
             btn = FolderActionButton(action_id, self.theme)
             self.folder_action_palette_layout.addWidget(btn)
+        self.folder_action_palette_layout.addSpacing(38)
 
     def create_launch_tab(self) -> QWidget:
         tab = QWidget()
@@ -1864,7 +1865,13 @@ class QuickFolderPanel(QMainWindow):
     def create_settings_tab(self) -> QWidget:
         """创建设置标签页"""
         tab = QWidget()
-        layout = QVBoxLayout(tab)
+        outer_layout = QVBoxLayout(tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 16, 16, 16)
 
         # 主题设置
@@ -1928,6 +1935,8 @@ class QuickFolderPanel(QMainWindow):
         about_layout.addWidget(about_label)
         layout.addWidget(about_group)
 
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
         return tab
 
     def startup_registry_value(self) -> str:
@@ -2283,6 +2292,8 @@ class QuickFolderPanel(QMainWindow):
 
     def adjust_window_height(self):
         """根据文件夹数量自动调整窗口高度"""
+        if getattr(self, "current_tab_index", 0) != 0:
+            return
         # 分别计算常用和非常用文件夹数量
         common_count = sum(1 for f in self.folders if f["is_common"])
         uncommon_count = sum(1 for f in self.folders if not f["is_common"])

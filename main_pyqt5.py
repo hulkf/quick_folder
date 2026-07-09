@@ -1419,7 +1419,19 @@ class QuickFolderPanel(QMainWindow):
     def on_folder_prefixes_changed(self):
         if hasattr(self, "folder_prefix_entry"):
             self.folder_remove_prefixes = self.parse_prefix_config(self.folder_prefix_entry.toPlainText())
+            self.sync_folder_remove_prefixes()
             self.save_config()
+
+    def sync_folder_remove_prefixes(self):
+        for list_widget_name in ("common_list", "uncommon_list"):
+            list_widget = getattr(self, list_widget_name, None)
+            if list_widget is None:
+                continue
+            for index in range(list_widget.count()):
+                item = list_widget.item(index)
+                widget = list_widget.itemWidget(item)
+                if isinstance(widget, FolderItemWidget):
+                    widget.remove_prefixes = self.folder_remove_prefixes
 
     def init_ui(self):
         """初始化用户界面"""

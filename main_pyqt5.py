@@ -49,7 +49,7 @@ from typing import List, Tuple, Optional
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
 FOLDER_ACTION_MIME = "application/x-quick-folder-action"
-FOLDER_ACTION_SLOT_COUNT = 5
+FOLDER_ACTION_SLOT_COUNT = 4
 DEFAULT_FOLDER_ACTION_ORDER = [
     "open",
     "paste",
@@ -1413,8 +1413,6 @@ class QuickFolderPanel(QMainWindow):
         for action_id in raw_order or []:
             if action_id in FOLDER_ACTIONS and action_id not in order:
                 order.append(action_id)
-        if "remove_prefix" in order and "add_prefix" not in order:
-            order.insert(order.index("remove_prefix") + 1, "add_prefix")
         for action_id in DEFAULT_FOLDER_ACTION_ORDER:
             if action_id not in order:
                 order.append(action_id)

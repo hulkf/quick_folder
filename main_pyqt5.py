@@ -49,7 +49,7 @@ from typing import List, Tuple, Optional
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
 FOLDER_ACTION_MIME = "application/x-quick-folder-action"
-FOLDER_ACTION_SLOT_COUNT = 4
+FOLDER_ACTION_SLOT_COUNT = 5
 DEFAULT_FOLDER_ACTION_ORDER = [
     "open",
     "paste",
@@ -59,6 +59,7 @@ DEFAULT_FOLDER_ACTION_ORDER = [
     "delete_archives",
     "classify",
     "remove_prefix",
+    "add_prefix",
 ]
 FOLDER_ACTIONS = {
     "open": {"label": "打开"},
@@ -69,6 +70,7 @@ FOLDER_ACTIONS = {
     "classify": {"label": "分类"},
     "new_folder": {"label": "新建"},
     "remove_prefix": {"label": "删前缀"},
+    "add_prefix": {"label": "加前缀"},
 }
 FOLDER_DELETE_BUTTON_WIDTH = 34
 FOLDER_ACTION_BUTTON_SPACING = 4
@@ -522,7 +524,8 @@ class FolderItemWidget(QWidget):
     _current_selected = None
 
     def __init__(self, path: str, display_name: str, is_common: bool, theme: dict,
-                 action_order: list = None, remove_prefixes: list = None, parent=None):
+                 action_order: list = None, remove_prefixes: list = None,
+                 add_prefix: str = "", parent=None):
         super().__init__(parent)
         self.path = path
         self.display_name = display_name
@@ -530,6 +533,7 @@ class FolderItemWidget(QWidget):
         self.theme = theme
         self.action_order = action_order or DEFAULT_FOLDER_ACTION_ORDER
         self.remove_prefixes = remove_prefixes or []
+        self.add_prefix = add_prefix or ""
         self._name_full_text = display_name
         self._selected = False
         self._normal_bg = theme['item_bg']
@@ -659,6 +663,7 @@ class FolderItemWidget(QWidget):
             "classify": self.classify_files,
             "new_folder": self.create_child_folder,
             "remove_prefix": self.remove_file_prefixes,
+            "add_prefix": self.add_file_prefixes,
         }
         action = actions.get(action_id)
         if action:
@@ -793,6 +798,35 @@ class FolderItemWidget(QWidget):
             except Exception as e:
                 errors += 1
                 print(f"删除前缀失败: {old_path} -> {e}")
+        msg = f"已处理 {renamed} 个文件"
+        if errors:
+            msg += f"\n{errors} 个文件处理失败"
+        QMessageBox.information(self, "完成", msg)
+
+    def add_file_prefixes(self):
+        if not self.ensure_folder_exists():
+            return
+        prefix = self.add_prefix.strip()
+        if not prefix:
+            QMessageBox.information(self, "提示", "请先在设置中配置要添加的前缀")
+            return
+        renamed, errors = 0, 0
+        for name in os.listdir(self.path):
+            old_path = os.path.join(self.path, name)
+            if not os.path.isfile(old_path):
+                continue
+            if name.startswith(prefix):
+                continue
+            new_path = os.path.join(self.path, f"{prefix}{name}")
+            if os.path.exists(new_path):
+                errors += 1
+                continue
+            try:
+                os.rename(old_path, new_path)
+                renamed += 1
+            except Exception as e:
+                errors += 1
+                print(f"添加前缀失败: {old_path} -> {e}")
         msg = f"已处理 {renamed} 个文件"
         if errors:
             msg += f"\n{errors} 个文件处理失败"
@@ -1288,6 +1322,7 @@ class QuickFolderPanel(QMainWindow):
         self.theme = THEMES.get(self.theme_name, THEMES["dark_teal"])
         self.folder_action_order = self.normalize_folder_action_order(self.config.get("folder_action_order"))
         self.folder_remove_prefixes = self.parse_prefix_config(self.config.get("folder_remove_prefixes", ""))
+        self.folder_add_prefix = self.config.get("folder_add_prefix", "")
         self.launch_items = self.load_launch_items()
         self.launch_processes = {}
         self.launch_tiles = {}
@@ -1335,6 +1370,9 @@ class QuickFolderPanel(QMainWindow):
                 "folder_remove_prefixes": self.folder_prefix_entry.toPlainText()
                     if hasattr(self, "folder_prefix_entry")
                     else self.config.get("folder_remove_prefixes", ""),
+                "folder_add_prefix": self.folder_add_prefix_entry.text()
+                    if hasattr(self, "folder_add_prefix_entry")
+                    else self.config.get("folder_add_prefix", ""),
                 "folder_sections_collapsed": {
                     "common": self.common_group.isChecked() is False
                         if hasattr(self, "common_group")
@@ -1375,6 +1413,8 @@ class QuickFolderPanel(QMainWindow):
         for action_id in raw_order or []:
             if action_id in FOLDER_ACTIONS and action_id not in order:
                 order.append(action_id)
+        if "remove_prefix" in order and "add_prefix" not in order:
+            order.insert(order.index("remove_prefix") + 1, "add_prefix")
         for action_id in DEFAULT_FOLDER_ACTION_ORDER:
             if action_id not in order:
                 order.append(action_id)
@@ -1422,6 +1462,11 @@ class QuickFolderPanel(QMainWindow):
             self.sync_folder_remove_prefixes()
             self.save_config()
 
+    def on_folder_add_prefix_changed(self, text: str):
+        self.folder_add_prefix = text
+        self.sync_folder_add_prefix()
+        self.save_config()
+
     def sync_folder_remove_prefixes(self):
         for list_widget_name in ("common_list", "uncommon_list"):
             list_widget = getattr(self, list_widget_name, None)
@@ -1432,6 +1477,17 @@ class QuickFolderPanel(QMainWindow):
                 widget = list_widget.itemWidget(item)
                 if isinstance(widget, FolderItemWidget):
                     widget.remove_prefixes = self.folder_remove_prefixes
+
+    def sync_folder_add_prefix(self):
+        for list_widget_name in ("common_list", "uncommon_list"):
+            list_widget = getattr(self, list_widget_name, None)
+            if list_widget is None:
+                continue
+            for index in range(list_widget.count()):
+                item = list_widget.item(index)
+                widget = list_widget.itemWidget(item)
+                if isinstance(widget, FolderItemWidget):
+                    widget.add_prefix = self.folder_add_prefix
 
     def init_ui(self):
         """初始化用户界面"""
@@ -1988,6 +2044,15 @@ class QuickFolderPanel(QMainWindow):
         self.folder_prefix_entry.setPlainText(self.config.get("folder_remove_prefixes", ""))
         self.folder_prefix_entry.textChanged.connect(self.on_folder_prefixes_changed)
         folder_actions_layout.addWidget(self.folder_prefix_entry)
+
+        add_prefix_label = QLabel("加前缀配置:")
+        add_prefix_label.setStyleSheet(f"color: {self.theme['fg']};")
+        folder_actions_layout.addWidget(add_prefix_label)
+        self.folder_add_prefix_entry = QLineEdit()
+        self.folder_add_prefix_entry.setPlaceholderText("输入要添加到文件名前面的内容")
+        self.folder_add_prefix_entry.setText(self.config.get("folder_add_prefix", ""))
+        self.folder_add_prefix_entry.textChanged.connect(self.on_folder_add_prefix_changed)
+        folder_actions_layout.addWidget(self.folder_add_prefix_entry)
         layout.addWidget(folder_actions_group)
         layout.addStretch()
 
@@ -2314,7 +2379,8 @@ class QuickFolderPanel(QMainWindow):
                 folder["is_common"],
                 self.theme,
                 self.folder_action_order,
-                self.folder_remove_prefixes
+                self.folder_remove_prefixes,
+                self.folder_add_prefix
             )
             # 连接信号
             widget.delete_requested.connect(self.remove_folder)

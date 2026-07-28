@@ -40,8 +40,16 @@ import ctypes
 import zipfile
 import tarfile
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional
+
+from feishu_sync import (
+    FeishuClipboardSyncWorker,
+    FeishuFieldLoader,
+    FeishuTargetLoader,
+    is_clipboard_text_field,
+)
 
 # ============================================================
 # 配置
@@ -1323,6 +1331,21 @@ class QuickFolderPanel(QMainWindow):
         self.folder_action_order = self.normalize_folder_action_order(self.config.get("folder_action_order"))
         self.folder_remove_prefixes = self.parse_prefix_config(self.config.get("folder_remove_prefixes", ""))
         self.folder_add_prefix = self.config.get("folder_add_prefix", "")
+        sync_config = self.config.get("feishu_sync", {})
+        self.sync_base_token = sync_config.get("base_token", "")
+        self.sync_identity = sync_config.get("identity", "")
+        self.sync_table_id = sync_config.get("table_id", "")
+        self.sync_table_name = sync_config.get("table_name", "")
+        self.sync_field_id = sync_config.get("field_id", "")
+        self.sync_field_name = sync_config.get("field_name", "")
+        self.sync_monitoring = False
+        self.sync_worker = None
+        self.sync_target_loader = None
+        self.sync_field_loader = None
+        self.sync_last_clipboard_text = ""
+        self.sync_success_count = 0
+        self.sync_failure_count = 0
+        self.current_tab_index = 0
         self.launch_items = self.load_launch_items()
         self.launch_processes = {}
         self.launch_tiles = {}
@@ -1337,6 +1360,9 @@ class QuickFolderPanel(QMainWindow):
 
         # 初始化UI
         self.init_ui()
+
+        # 剪贴板变化只在“启动监控”状态下处理。
+        QApplication.clipboard().dataChanged.connect(self.on_clipboard_changed)
 
         # 应用窗口位置
         self.apply_window_position()
@@ -1381,6 +1407,17 @@ class QuickFolderPanel(QMainWindow):
                         if hasattr(self, "uncommon_group")
                         else self.config.get("folder_sections_collapsed", {}).get("uncommon", False),
                 },
+                "feishu_sync": {
+                    "document_url": self.sync_document_entry.text().strip()
+                        if hasattr(self, "sync_document_entry")
+                        else self.config.get("feishu_sync", {}).get("document_url", ""),
+                    "base_token": self.sync_base_token,
+                    "identity": self.sync_identity,
+                    "table_id": self.sync_table_id,
+                    "table_name": self.sync_table_name,
+                    "field_id": self.sync_field_id,
+                    "field_name": self.sync_field_name,
+                },
                 "theme": self.theme_name,
                 "window_pos": {
                     "x": self.x(),
@@ -1389,6 +1426,7 @@ class QuickFolderPanel(QMainWindow):
                     "height": self.height()
                 }
             }
+            self.config = config
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -1513,19 +1551,21 @@ class QuickFolderPanel(QMainWindow):
         self.merge_tab = self.create_merge_tab()
         self.extract_tab = self.create_extract_tab()
         self.launch_tab = self.create_launch_tab()
+        self.sync_tab = self.create_sync_tab()
         self.settings_tab = self.create_settings_tab()
 
         self.content_layout.addWidget(self.folder_tab)
         self.content_layout.addWidget(self.merge_tab)
         self.content_layout.addWidget(self.extract_tab)
         self.content_layout.addWidget(self.launch_tab)
+        self.content_layout.addWidget(self.sync_tab)
         self.content_layout.addWidget(self.settings_tab)
 
-        # 隐藏非活动 tab
-        self.merge_tab.hide()
-        self.extract_tab.hide()
-        self.launch_tab.hide()
-        self.settings_tab.hide()
+        # 恢复重建 UI 前所在的标签页。
+        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.launch_tab, self.sync_tab, self.settings_tab]
+        active_index = min(getattr(self, "current_tab_index", 0), len(tabs) - 1)
+        for index, page in enumerate(tabs):
+            page.setVisible(index == active_index)
 
         main_layout.addWidget(self.content_stack, 1)
 
@@ -1580,13 +1620,14 @@ class QuickFolderPanel(QMainWindow):
             ("📁 合并", 1),
             ("📦 解压", 2),
             ("🚀 启动", 3),
-            ("⚙️ 设置", 4),
+            ("🔄 同步", 4),
+            ("⚙️ 设置", 5),
         ]
 
         for label, idx in tabs:
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setChecked(idx == 0)
+            btn.setChecked(idx == getattr(self, "current_tab_index", 0))
             btn.setFixedHeight(28)
             btn.setStyleSheet(f"""
                 QPushButton {{
@@ -1625,7 +1666,7 @@ class QuickFolderPanel(QMainWindow):
     def switch_tab(self, index: int):
         """切换标签页"""
         self.current_tab_index = index
-        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.launch_tab, self.settings_tab]
+        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.launch_tab, self.sync_tab, self.settings_tab]
         for i, tab in enumerate(tabs):
             tab.setVisible(i == index)
         for i, btn in enumerate(self.tab_buttons):
@@ -1979,6 +2020,351 @@ class QuickFolderPanel(QMainWindow):
         layout.addWidget(self.extract_progress)
 
         return tab
+
+    def create_sync_tab(self) -> QWidget:
+        """创建剪贴板到飞书多维表格的同步标签页。"""
+        tab = QWidget()
+        outer_layout = QVBoxLayout(tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        target_group = QGroupBox("飞书同步目标")
+        target_layout = QGridLayout(target_group)
+        target_layout.setColumnStretch(1, 1)
+
+        target_layout.addWidget(QLabel("多维表格链接:"), 0, 0)
+        self.sync_document_entry = QLineEdit()
+        self.sync_document_entry.setPlaceholderText("粘贴飞书 Base / Wiki 中的数据表链接")
+        self.sync_document_entry.setText(self.config.get("feishu_sync", {}).get("document_url", ""))
+        self.sync_document_entry.editingFinished.connect(self.on_sync_document_edited)
+        target_layout.addWidget(self.sync_document_entry, 0, 1, 1, 2)
+
+        target_layout.addWidget(QLabel("数据表:"), 1, 0)
+        self.sync_table_combo = QComboBox()
+        self.sync_table_combo.setMinimumHeight(30)
+        if self.sync_table_id and self.sync_table_name:
+            self.sync_table_combo.addItem(
+                self.sync_table_name,
+                {"id": self.sync_table_id, "name": self.sync_table_name},
+            )
+        self.sync_table_combo.activated.connect(self.on_sync_table_selected)
+        target_layout.addWidget(self.sync_table_combo, 1, 1)
+
+        self.sync_refresh_btn = QPushButton("检测并加载")
+        self.sync_refresh_btn.clicked.connect(self.refresh_sync_target)
+        target_layout.addWidget(self.sync_refresh_btn, 1, 2)
+
+        target_layout.addWidget(QLabel("目标字段:"), 2, 0)
+        self.sync_field_combo = QComboBox()
+        self.sync_field_combo.setMinimumHeight(30)
+        if self.sync_field_id and self.sync_field_name:
+            self.sync_field_combo.addItem(
+                self.sync_field_name,
+                {"id": self.sync_field_id, "name": self.sync_field_name, "type": "text"},
+            )
+        self.sync_field_combo.activated.connect(self.on_sync_field_selected)
+        target_layout.addWidget(self.sync_field_combo, 2, 1, 1, 2)
+
+        target_hint = QLabel("为保证剪贴板内容完整写入，仅显示可写的文本字段。严格使用本机 lark-cli 用户身份，不使用 Bot。")
+        target_hint.setWordWrap(True)
+        target_hint.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        target_layout.addWidget(target_hint, 3, 0, 1, 3)
+        layout.addWidget(target_group)
+
+        monitor_group = QGroupBox("剪贴板监控")
+        monitor_layout = QVBoxLayout(monitor_group)
+        control_layout = QHBoxLayout()
+        self.sync_monitor_btn = QPushButton("▶ 启动监控")
+        self.sync_monitor_btn.setCheckable(True)
+        self.sync_monitor_btn.setMinimumHeight(36)
+        self.sync_monitor_btn.clicked.connect(self.toggle_sync_monitoring)
+        control_layout.addWidget(self.sync_monitor_btn)
+        control_layout.addStretch()
+        self.sync_count_label = QLabel("成功 0 条 · 失败 0 条")
+        control_layout.addWidget(self.sync_count_label)
+        monitor_layout.addLayout(control_layout)
+
+        self.sync_status_label = QLabel("未启动。请先检测连接并选择目标字段。")
+        self.sync_status_label.setWordWrap(True)
+        self.sync_status_label.setStyleSheet(f"color: {self.theme['gray']};")
+        monitor_layout.addWidget(self.sync_status_label)
+
+        self.sync_log = QPlainTextEdit()
+        self.sync_log.setReadOnly(True)
+        self.sync_log.setMaximumBlockCount(100)
+        self.sync_log.setFixedHeight(110)
+        self.sync_log.setPlaceholderText("同步结果会显示在这里")
+        monitor_layout.addWidget(self.sync_log)
+        layout.addWidget(monitor_group)
+        layout.addStretch()
+
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
+        self.update_sync_ui_state()
+        return tab
+
+    def on_sync_document_edited(self):
+        """链接修改后废弃旧坐标，避免把内容写入此前的文档。"""
+        document_url = self.sync_document_entry.text().strip()
+        resolved_url = getattr(self, "sync_resolved_url", self.config.get("feishu_sync", {}).get("document_url", ""))
+        if document_url != resolved_url:
+            self.sync_base_token = ""
+            self.sync_identity = ""
+            self.sync_table_id = ""
+            self.sync_table_name = ""
+            self.sync_field_id = ""
+            self.sync_field_name = ""
+            self.sync_table_combo.clear()
+            self.sync_field_combo.clear()
+            self.sync_status_label.setText("链接已修改，请点击“检测并加载”。")
+        self.save_config()
+        self.update_sync_ui_state()
+
+    def refresh_sync_target(self):
+        document_url = self.sync_document_entry.text().strip()
+        if not document_url:
+            QMessageBox.warning(self, "缺少配置", "请先粘贴飞书多维表格链接")
+            return
+        if self.sync_target_loader is not None and self.sync_target_loader.isRunning():
+            return
+
+        self.sync_refresh_btn.setEnabled(False)
+        self.sync_refresh_btn.setText("正在检测...")
+        self.sync_status_label.setText("正在检查飞书身份并读取数据表与字段...")
+        self.sync_target_loader = FeishuTargetLoader(
+            document_url,
+            self.sync_table_id,
+            self.sync_table_name,
+        )
+        self.sync_target_loader.loaded.connect(self.on_sync_target_loaded)
+        self.sync_target_loader.failed.connect(self.on_sync_target_failed)
+        self.sync_target_loader.finished.connect(self.on_sync_target_loader_finished)
+        self.sync_target_loader.start()
+
+    def on_sync_target_loader_finished(self):
+        if hasattr(self, "sync_refresh_btn"):
+            self.sync_refresh_btn.setText("检测并加载")
+        self.update_sync_ui_state()
+
+    def on_sync_target_loaded(self, result: dict):
+        self.sync_identity = result.get("identity", "")
+        self.sync_base_token = result.get("base_token", "")
+        self.sync_resolved_url = self.sync_document_entry.text().strip()
+
+        selected_table_id = result.get("selected_table_id", "")
+        self.sync_table_combo.blockSignals(True)
+        self.sync_table_combo.clear()
+        selected_index = 0
+        for index, table in enumerate(result.get("tables", [])):
+            self.sync_table_combo.addItem(table["name"], table)
+            if table["id"] == selected_table_id:
+                selected_index = index
+        self.sync_table_combo.setCurrentIndex(selected_index)
+        self.sync_table_combo.blockSignals(False)
+
+        table = self.sync_table_combo.currentData() or {}
+        self.sync_table_id = table.get("id", "")
+        self.sync_table_name = table.get("name", "")
+        self.populate_sync_fields(result.get("fields", []), self.sync_field_id, self.sync_field_name)
+
+        if self.sync_field_id:
+            self.sync_status_label.setText("连接成功（CLI 用户身份），可以启动监控。")
+        else:
+            self.sync_status_label.setText("连接成功，但当前数据表没有可写的文本字段。")
+        self.save_config()
+        self.update_sync_ui_state()
+
+    def on_sync_target_failed(self, message: str):
+        self.sync_status_label.setText(f"连接失败：{message}")
+        self.append_sync_log("连接失败", message)
+        self.update_sync_ui_state()
+
+    def populate_sync_fields(self, fields: list, preferred_id: str = "", preferred_name: str = ""):
+        writable_fields = [field for field in fields if is_clipboard_text_field(field)]
+        self.sync_field_combo.blockSignals(True)
+        self.sync_field_combo.clear()
+        selected_index = 0
+        for index, field in enumerate(writable_fields):
+            label = field["name"]
+            self.sync_field_combo.addItem(label, field)
+            if field["id"] == preferred_id or (not preferred_id and field["name"] == preferred_name):
+                selected_index = index
+        if writable_fields:
+            self.sync_field_combo.setCurrentIndex(selected_index)
+            field = self.sync_field_combo.currentData() or {}
+            self.sync_field_id = field.get("id", "")
+            self.sync_field_name = field.get("name", "")
+        else:
+            self.sync_field_id = ""
+            self.sync_field_name = ""
+        self.sync_field_combo.blockSignals(False)
+
+    def on_sync_table_selected(self, index: int):
+        table = self.sync_table_combo.itemData(index) or {}
+        table_id = table.get("id", "")
+        if not table_id or not self.sync_base_token or not self.sync_identity:
+            return
+        self.sync_table_id = table_id
+        self.sync_table_name = table.get("name", "")
+        self.sync_field_id = ""
+        self.sync_field_name = ""
+        self.sync_field_combo.clear()
+        self.sync_table_combo.setEnabled(False)
+        self.sync_status_label.setText("正在读取目标数据表的字段...")
+
+        if self.sync_field_loader is not None and self.sync_field_loader.isRunning():
+            self.sync_field_loader.cancel()
+            self.sync_field_loader.wait(1000)
+        self.sync_field_loader = FeishuFieldLoader(self.sync_base_token, table_id, self.sync_identity)
+        self.sync_field_loader.loaded.connect(self.on_sync_fields_loaded)
+        self.sync_field_loader.failed.connect(self.on_sync_fields_failed)
+        self.sync_field_loader.finished.connect(self.update_sync_ui_state)
+        self.sync_field_loader.start()
+
+    def on_sync_fields_loaded(self, table_id: str, fields: list):
+        if table_id != self.sync_table_id:
+            return
+        self.populate_sync_fields(fields)
+        if self.sync_field_id:
+            self.sync_status_label.setText("字段读取成功，可以启动监控。")
+        else:
+            self.sync_status_label.setText("该数据表没有可写的文本字段。")
+        self.save_config()
+
+    def on_sync_fields_failed(self, message: str):
+        self.sync_status_label.setText(f"字段读取失败：{message}")
+        self.append_sync_log("字段读取失败", message)
+
+    def on_sync_field_selected(self, index: int):
+        field = self.sync_field_combo.itemData(index) or {}
+        self.sync_field_id = field.get("id", "")
+        self.sync_field_name = field.get("name", "")
+        self.save_config()
+        self.update_sync_ui_state()
+
+    def sync_target_is_ready(self) -> bool:
+        return all((
+            self.sync_document_entry.text().strip() if hasattr(self, "sync_document_entry") else "",
+            self.sync_base_token,
+            self.sync_identity == "user",
+            self.sync_table_id,
+            self.sync_field_id,
+        ))
+
+    def toggle_sync_monitoring(self):
+        if self.sync_monitoring:
+            self.stop_sync_monitoring()
+        else:
+            self.start_sync_monitoring()
+
+    def start_sync_monitoring(self):
+        field = self.sync_field_combo.currentData() or {}
+        if not self.sync_target_is_ready() or not is_clipboard_text_field(field):
+            self.sync_monitor_btn.setChecked(False)
+            QMessageBox.warning(self, "同步目标未就绪", "请先检测连接，并选择数据表中的文本字段")
+            return
+
+        target = {
+            "identity": self.sync_identity,
+            "base_token": self.sync_base_token,
+            "table_id": self.sync_table_id,
+            "field_id": self.sync_field_id,
+        }
+        self.sync_worker = FeishuClipboardSyncWorker(target)
+        self.sync_worker.synced.connect(self.on_sync_succeeded)
+        self.sync_worker.failed.connect(self.on_sync_failed)
+        worker = self.sync_worker
+        self.sync_worker.finished.connect(lambda: self.on_sync_worker_finished(worker))
+        self.sync_worker.start()
+        self.sync_monitoring = True
+        self.sync_last_clipboard_text = QApplication.clipboard().text()
+        self.sync_status_label.setText("监控中：等待剪贴板出现新的文本内容。")
+        self.append_sync_log("监控已启动", f"{self.sync_table_name} / {self.sync_field_name}")
+        self.save_config()
+        self.update_sync_ui_state()
+
+    def stop_sync_monitoring(self, wait_ms: int = 1200):
+        self.sync_monitoring = False
+        worker = self.sync_worker
+        if worker is not None:
+            worker.stop()
+            worker.wait(wait_ms)
+            if not worker.isRunning():
+                self.sync_worker = None
+        if hasattr(self, "sync_status_label"):
+            self.sync_status_label.setText("监控已停止，不会同步剪贴板变化。")
+            self.append_sync_log("监控已停止", "")
+            self.update_sync_ui_state()
+
+    def on_sync_worker_finished(self, worker):
+        if self.sync_worker is worker:
+            self.sync_worker = None
+        self.update_sync_ui_state()
+
+    def update_sync_ui_state(self):
+        if not hasattr(self, "sync_monitor_btn"):
+            return
+        target_loading = self.sync_target_loader is not None and self.sync_target_loader.isRunning()
+        field_loading = self.sync_field_loader is not None and self.sync_field_loader.isRunning()
+        worker_stopping = self.sync_worker is not None and self.sync_worker.isRunning() and not self.sync_monitoring
+        controls_enabled = not self.sync_monitoring and not target_loading and not field_loading and not worker_stopping
+        self.sync_document_entry.setEnabled(controls_enabled)
+        self.sync_table_combo.setEnabled(controls_enabled)
+        self.sync_field_combo.setEnabled(controls_enabled)
+        self.sync_refresh_btn.setEnabled(controls_enabled)
+        self.sync_monitor_btn.setChecked(self.sync_monitoring)
+        self.sync_monitor_btn.setText("■ 停止监控" if self.sync_monitoring else "▶ 启动监控")
+        self.sync_monitor_btn.setEnabled(self.sync_monitoring or (controls_enabled and self.sync_target_is_ready()))
+        self.sync_count_label.setText(f"成功 {self.sync_success_count} 条 · 失败 {self.sync_failure_count} 条")
+
+    def on_clipboard_changed(self):
+        if not self.sync_monitoring or self.sync_worker is None:
+            return
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+        if not mime.hasText():
+            return
+        text = mime.text()
+        if text == "" or text == self.sync_last_clipboard_text:
+            return
+        self.sync_last_clipboard_text = text
+        self.sync_worker.enqueue(text)
+        self.sync_status_label.setText("已发现新内容，正在写入飞书多维表格...")
+        self.append_sync_log("等待同步", self.sync_text_preview(text))
+
+    def on_sync_succeeded(self, text: str, record_id: str):
+        self.sync_success_count += 1
+        suffix = f"（{record_id}）" if record_id else ""
+        self.sync_status_label.setText(f"同步成功{suffix}，继续监控中。")
+        self.append_sync_log("同步成功", self.sync_text_preview(text))
+        self.update_sync_ui_state()
+
+    def on_sync_failed(self, text: str, message: str):
+        self.sync_failure_count += 1
+        self.sync_status_label.setText(f"同步失败：{message}；监控仍在继续。")
+        self.append_sync_log("同步失败", f"{self.sync_text_preview(text)} | {message}")
+        self.update_sync_ui_state()
+
+    @staticmethod
+    def sync_text_preview(text: str, length: int = 80) -> str:
+        preview = text.replace("\r", " ").replace("\n", " ")
+        return preview if len(preview) <= length else preview[:length] + "..."
+
+    def append_sync_log(self, action: str, detail: str):
+        if not hasattr(self, "sync_log"):
+            return
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        line = f"[{timestamp}] {action}"
+        if detail:
+            line += f"：{detail}"
+        self.sync_log.appendPlainText(line)
 
     def create_settings_tab(self) -> QWidget:
         """创建设置标签页"""
@@ -2746,6 +3132,11 @@ class QuickFolderPanel(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        self.stop_sync_monitoring(wait_ms=6500)
+        for worker in (self.sync_target_loader, self.sync_field_loader):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+                worker.wait(6500)
         self.save_config()
         event.accept()
 

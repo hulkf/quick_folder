@@ -1414,6 +1414,11 @@ class QuickFolderPanel(QMainWindow):
         self.sync_last_clipboard_text = ""
         self.sync_success_count = 0
         self.sync_failure_count = 0
+        # 轮询兜底：部分跨设备互联工具（如小米互联）写入剪贴板时
+        # Qt 的 dataChanged 信号可能收不到，需要低频轮询补漏。
+        self.sync_poll_timer = QTimer(self)
+        self.sync_poll_timer.timeout.connect(self.on_sync_poll)
+        self._clipboard_read_pending = False
         self.current_tab_index = 0
         self.launch_items = self.load_launch_items()
         self.launch_processes = {}
@@ -2391,6 +2396,7 @@ class QuickFolderPanel(QMainWindow):
         self.sync_worker.finished.connect(lambda: self.on_sync_worker_finished(worker))
         self.sync_worker.start()
         self.sync_monitoring = True
+        self.sync_poll_timer.start(1500)
         self.sync_last_clipboard_text = QApplication.clipboard().text()
         self.sync_status_label.setText("监控中：等待剪贴板出现新的文本内容。")
         self.append_sync_log("监控已启动", f"{self.sync_table_name} / {self.sync_field_name}")
@@ -2399,6 +2405,7 @@ class QuickFolderPanel(QMainWindow):
 
     def stop_sync_monitoring(self, wait_ms: int = 1200):
         self.sync_monitoring = False
+        self.sync_poll_timer.stop()
         worker = self.sync_worker
         if worker is not None:
             worker.stop()
@@ -2431,20 +2438,55 @@ class QuickFolderPanel(QMainWindow):
         self.sync_monitor_btn.setEnabled(self.sync_monitoring or (controls_enabled and self.sync_target_is_ready()))
         self.sync_count_label.setText(f"成功 {self.sync_success_count} 条 · 失败 {self.sync_failure_count} 条")
 
-    def on_clipboard_changed(self):
+    def _handle_new_clipboard_text(self, text: str):
+        """去重后把新的剪贴板文本交给同步线程（信号触发与轮询共用）。"""
         if not self.sync_monitoring or self.sync_worker is None:
             return
-        clipboard = QApplication.clipboard()
-        mime = clipboard.mimeData()
-        if not mime.hasText():
-            return
-        text = mime.text()
-        if text == "" or text == self.sync_last_clipboard_text:
+        if not text or text == self.sync_last_clipboard_text:
             return
         self.sync_last_clipboard_text = text
         self.sync_worker.enqueue(text)
         self.sync_status_label.setText("已发现新内容，正在写入飞书多维表格...")
         self.append_sync_log("等待同步", self.sync_text_preview(text))
+
+    def on_clipboard_changed(self):
+        if not self.sync_monitoring or self.sync_worker is None:
+            return
+        # 部分工具（如小米互联）写入剪贴板时，文本内容可能延迟就绪：
+        # 信号触发那一刻 mime.text() 可能为空或还是旧内容。
+        # 改为延迟读取并重试，避免读到空内容后直接丢弃。
+        if self._clipboard_read_pending:
+            return
+        self._clipboard_read_pending = True
+        self._read_clipboard_delayed(attempt=0)
+
+    def _read_clipboard_delayed(self, attempt: int):
+        if not self.sync_monitoring or self.sync_worker is None:
+            self._clipboard_read_pending = False
+            return
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+        if mime.hasText():
+            text = mime.text()
+            if text:
+                self._clipboard_read_pending = False
+                self._handle_new_clipboard_text(text)
+                return
+        if attempt < 3:
+            QTimer.singleShot(250, lambda: self._read_clipboard_delayed(attempt + 1))
+        else:
+            self._clipboard_read_pending = False
+
+    def on_sync_poll(self):
+        """兜底轮询：覆盖未触发 dataChanged 的剪贴板写入。
+
+        部分跨设备互联工具（如小米互联）写入系统剪贴板时，Qt 可能
+        收不到剪贴板变化通知，定时轮询可以保证这类内容也能被发现。
+        """
+        if not self.sync_monitoring or self.sync_worker is None:
+            return
+        text = QApplication.clipboard().text()
+        self._handle_new_clipboard_text(text)
 
     def on_sync_succeeded(self, text: str, record_id: str):
         self.sync_success_count += 1

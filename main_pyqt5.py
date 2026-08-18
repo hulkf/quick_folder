@@ -3550,6 +3550,7 @@ class QuickFolderPanel(QMainWindow):
         extracted_files = []
         deleted_archives = 0
         delete_errors = 0
+        error_details = []
         for i, file_path in enumerate(files):
             try:
                 if separate_mode:
@@ -3567,6 +3568,7 @@ class QuickFolderPanel(QMainWindow):
             except Exception as e:
                 errors += 1
                 print(f"解压失败: {file_path} -> {e}")
+                error_details.append(f"{os.path.basename(file_path)}: {e}")
 
             self.extract_progress.setValue(i + 1)
 
@@ -3584,6 +3586,11 @@ class QuickFolderPanel(QMainWindow):
         msg = f"解压完成：{success} 个成功"
         if errors > 0:
             msg += f"，{errors} 个失败"
+            if error_details:
+                shown = error_details[:5]
+                msg += "\n\n失败原因：\n" + "\n".join(shown)
+                if len(error_details) > 5:
+                    msg += f"\n… 另有 {len(error_details) - 5} 个失败未列出"
         if deleted_archives > 0:
             msg += f"\n已删除 {deleted_archives} 个压缩包"
         if delete_errors > 0:
@@ -3622,27 +3629,103 @@ class QuickFolderPanel(QMainWindow):
             raise ValueError(f"不支持的文件格式: {filepath}")
 
     def extract_with_7z(self, filepath: str, outdir: str):
-        """使用 7z 命令行解压"""
-        # 尝试常见路径
-        sevenz_paths = [
-            "7z",
-            r"C:\Program Files\7-Zip\7z.exe",
-            r"C:\Program Files (x86)\7-Zip\7z.exe",
-        ]
+        """使用 7z / WinRAR 命令行工具解压（rar/7z 格式需要外部工具）"""
+        tools = self._find_extract_tools()
+        if not tools:
+            raise RuntimeError(
+                "未找到可用的解压工具（7-Zip / WinRAR）。\n"
+                "rar / 7z 格式需要命令行解压工具，请先安装免费的 7-Zip 后重试。"
+            )
 
-        for cmd in sevenz_paths:
+        last_error = ""
+        for cmd, kind in tools:
             try:
+                if kind == "7z":
+                    args = [cmd, "x", filepath, f"-o{outdir}", "-y"]
+                else:  # WinRAR / UnRAR：目标目录参数需以 \ 结尾
+                    target = outdir if outdir.endswith(os.sep) else outdir + os.sep
+                    args = [cmd, "x", "-y", filepath, target]
                 result = subprocess.run(
-                    [cmd, "x", filepath, f"-o{outdir}", "-y"],
+                    args,
                     capture_output=True,
-                    text=True
+                    text=True,
+                    errors="replace",
+                    timeout=7200
                 )
                 if result.returncode == 0:
                     return
+                err_detail = (result.stderr or result.stdout or "").strip()
+                last_error = (
+                    f"工具 {os.path.basename(cmd)} 解压失败"
+                    f"(退出码 {result.returncode}): {err_detail[:300]}"
+                )
             except FileNotFoundError:
                 continue
+            except subprocess.TimeoutExpired:
+                last_error = f"工具 {os.path.basename(cmd)} 解压超时（文件过大或异常）"
 
-        raise RuntimeError("未找到 7z 命令，请安装 7-Zip")
+        raise RuntimeError(last_error or "解压失败，未知错误")
+
+    def _find_extract_tools(self):
+        """探测本机可用的命令行解压工具，返回 [(命令路径, 参数风格)]"""
+        tools = []
+
+        # 1. 注册表定位 7-Zip 与 WinRAR 安装路径
+        try:
+            import winreg
+            reg_locs = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\7-Zip", "Path", "7z.exe", "7z"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\7-Zip", "Path", "7z.exe", "7z"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\7-Zip", "Path", "7z.exe", "7z"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WinRAR", "exe64", None, "winrar"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\WinRAR", "exe64", None, "winrar"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\WinRAR", "exe64", None, "winrar"),
+            ]
+            for hive, subkey, value_name, fixed_name, kind in reg_locs:
+                try:
+                    with winreg.OpenKey(hive, subkey) as key:
+                        val, _ = winreg.QueryValueEx(key, value_name)
+                    if fixed_name:
+                        p = os.path.join(val, fixed_name)
+                    else:
+                        p = val
+                    if p and os.path.isfile(p):
+                        tools.append((p, kind))
+                        break  # 每类工具找到第一个就够用
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+
+        # 2. 常见安装路径
+        common_paths = [
+            (r"C:\Program Files\7-Zip\7z.exe", "7z"),
+            (r"C:\Program Files (x86)\7-Zip\7z.exe", "7z"),
+            (r"C:\Program Files\WinRAR\UnRAR.exe", "winrar"),
+            (r"C:\Program Files\WinRAR\WinRAR.exe", "winrar"),
+            (r"C:\Program Files (x86)\WinRAR\UnRAR.exe", "winrar"),
+            (r"C:\Program Files (x86)\WinRAR\WinRAR.exe", "winrar"),
+        ]
+        for p, kind in common_paths:
+            if os.path.isfile(p):
+                tools.append((p, kind))
+
+        # 3. PATH 中的命令
+        for name, kind in [("7z", "7z"), ("7za", "7z"), ("7zr", "7z"),
+                           ("unrar", "winrar"), ("WinRAR", "winrar")]:
+            found = shutil.which(name)
+            if found:
+                tools.append((found, kind))
+
+        # 去重（同一工具只保留一次）
+        seen = set()
+        unique = []
+        for cmd, kind in tools:
+            key = (os.path.normcase(cmd), kind)
+            if key not in seen:
+                seen.add(key)
+                unique.append((cmd, kind))
+        return unique
 
 
 # ============================================================

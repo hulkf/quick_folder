@@ -2053,17 +2053,27 @@ class QuickFolderPanel(QMainWindow):
             ("⚙️ 设置", 6),
         ]
 
+        # 先按最宽的文字算出统一宽度，保证所有 tab 等宽且文字不被裁掉
+        tab_font = QFont()
+        tab_font.setPointSize(13)
+        tab_font.setBold(True)
+        tab_metrics = QFontMetrics(tab_font)
+        tab_width = max(
+            96,
+            max(tab_metrics.horizontalAdvance(label) for label, _ in tabs) + 26,
+        )
+
         for label, idx in tabs:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(idx == getattr(self, "current_tab_index", 0))
-            btn.setFixedHeight(28)
+            btn.setFixedSize(tab_width, 28)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {self.theme['tab_inactive']};
                     color: {self.theme['gray']};
                     border: none;
-                    padding: 4px 12px;
+                    padding: 4px 10px;
                     border-radius: 4px;
                     font-size: 13px;
                     font-weight: bold;
@@ -2503,6 +2513,9 @@ class QuickFolderPanel(QMainWindow):
         select_btn.clicked.connect(self.image_select_output)
         output_layout.addWidget(select_btn)
 
+        # 记录宽度，让下行的拆分/合并按钮与「选择目录」按钮保持一致
+        self._image_side_btn_width = select_btn.width()
+
         layout.addLayout(output_layout)
 
         # 选项行：切分份数（输入框）+ 删除原图 + 拆分/合并按钮
@@ -2549,13 +2562,13 @@ class QuickFolderPanel(QMainWindow):
         """
 
         self.image_split_btn = QPushButton("✂ 批量拆分")
-        self.image_split_btn.setFixedSize(96, 30)
+        self.image_split_btn.setFixedSize(self._image_side_btn_width, 30)
         self.image_split_btn.setStyleSheet(action_btn_style)
         self.image_split_btn.clicked.connect(self.image_start_split)
         option_layout.addWidget(self.image_split_btn)
 
         self.image_merge_btn = QPushButton("⇅ 批量合并")
-        self.image_merge_btn.setFixedSize(96, 30)
+        self.image_merge_btn.setFixedSize(self._image_side_btn_width, 30)
         self.image_merge_btn.setStyleSheet(action_btn_style)
         self.image_merge_btn.clicked.connect(self.image_start_merge)
         option_layout.addWidget(self.image_merge_btn)
@@ -2567,16 +2580,25 @@ class QuickFolderPanel(QMainWindow):
             warn_label.setStyleSheet(f"color: {self.theme['gold']}; font-size: 11px;")
             layout.addWidget(warn_label)
 
-        # 进度信息
+        # 进度信息（初始为空，不占高度，避免底部出现多余空行）
         self.image_progress_label = QLabel("")
         self.image_progress_label.setWordWrap(True)
         self.image_progress_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        self.image_progress_label.setVisible(False)
         layout.addWidget(self.image_progress_label)
 
-        # 进度条
+        # 进度条（初始隐藏且不参与布局占位）
         self.image_progress = QProgressBar()
         self.image_progress.setVisible(False)
         layout.addWidget(self.image_progress)
+        layout.addStretch(0)
+
+        # 用 setRetainSizeWhenHidden 让隐藏控件不占空间，
+        # 否则底部会残留空行
+        for widget in (self.image_progress_label, self.image_progress):
+            policy = widget.sizePolicy()
+            policy.setRetainSizeWhenHidden(False)
+            widget.setSizePolicy(policy)
 
         return tab
 

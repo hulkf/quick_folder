@@ -2004,6 +2004,7 @@ class QuickFolderPanel(QMainWindow):
     def create_title_bar(self) -> QWidget:
         """创建标题栏（包含 Tab 按钮和 Pin）"""
         title_bar = QWidget()
+        self.title_bar = title_bar
         title_bar.setFixedHeight(36)
         title_bar.setObjectName("titleBar")
         title_bar.setStyleSheet(f"""
@@ -2041,7 +2042,10 @@ class QuickFolderPanel(QMainWindow):
         self.pin_btn.clicked.connect(self.toggle_topmost)
         layout.addWidget(self.pin_btn)
 
-        # Tab 按钮
+        # Tab 按钮：宽度按内容自适应。
+        # 「📂 文件夹」3 个字所以更宽，「📁 合并」2 个字用基本宽度即可，
+        # 不做等宽。7 个 tab 一行放不下时由 relayout_tab_buttons 自动折行，
+        # 避免被压窄导致 emoji 与中文重叠看不清。
         self.tab_buttons = []
         tabs = [
             ("📂 文件夹", 0),
@@ -2053,27 +2057,27 @@ class QuickFolderPanel(QMainWindow):
             ("⚙️ 设置", 6),
         ]
 
-        # 先按最宽的文字算出统一宽度，保证所有 tab 等宽且文字不被裁掉
-        tab_font = QFont()
-        tab_font.setPointSize(13)
-        tab_font.setBold(True)
-        tab_metrics = QFontMetrics(tab_font)
-        tab_width = max(
-            96,
-            max(tab_metrics.horizontalAdvance(label) for label, _ in tabs) + 26,
-        )
+        self.tab_grid = QGridLayout()
+        self.tab_grid.setContentsMargins(32, 0, 0, 2)
+        self.tab_grid.setHorizontalSpacing(4)
+        self.tab_grid.setVerticalSpacing(4)
 
         for label, idx in tabs:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(idx == getattr(self, "current_tab_index", 0))
-            btn.setFixedSize(tab_width, 28)
+            btn.setFixedHeight(26)
+            # 宽度自适应：中文按 15px/字估算 + emoji 与内边距，
+            # 2 字标签基本宽度 66px，3 字标签自然更宽
+            width = self.tab_button_width(label)
+            btn.setMinimumWidth(width)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {self.theme['tab_inactive']};
                     color: {self.theme['gray']};
                     border: none;
-                    padding: 4px 10px;
+                    padding: 2px 8px;
                     border-radius: 4px;
                     font-size: 13px;
                     font-weight: bold;
@@ -2087,12 +2091,70 @@ class QuickFolderPanel(QMainWindow):
                 }}
             """)
             btn.clicked.connect(lambda checked, i=idx: self.switch_tab(i))
-            layout.addWidget(btn)
             self.tab_buttons.append(btn)
+
+        layout.addLayout(self.tab_grid, 1)
+        self.relayout_tab_buttons()
 
         layout.addStretch()
 
         return title_bar
+
+    @staticmethod
+    def tab_button_width(label: str) -> int:
+        """按标签文字长度估算 tab 按钮宽度（中文更宽，英文/emoji 较窄）"""
+        # 去掉 emoji 后统计中文字数
+        text = "".join(ch for ch in label if not (0x1F000 <= ord(ch) <= 0x1FAFF
+                                                  or 0x2600 <= ord(ch) <= 0x27BF
+                                                  or ord(ch) == 0xFE0F))
+        text = text.strip()
+        base = 40          # emoji + 内边距
+        return base + len(text) * 16
+
+    def relayout_tab_buttons(self):
+        """把 tab 按钮排进网格：优先一行放完，实在放不下才折行
+
+        每个按钮宽度按内容自适应（「文件夹」3 字更宽），总宽不够时才折行。
+        """
+        if getattr(self, "tab_grid", None) is None or not self.tab_buttons:
+            return
+
+        spacing = 4
+        # 左边距 32(pin 按钮占位) + 右边距 8，留少量余量避免差几像素就折行
+        avail = max(200, self.width() - 44)
+        total = sum(b.minimumWidth() for b in self.tab_buttons) + spacing * (len(self.tab_buttons) - 1)
+
+        if total <= avail:
+            rows = [list(self.tab_buttons)]
+        else:
+            rows, row, used = [], [], 0
+            for btn in self.tab_buttons:
+                w = btn.minimumWidth() + spacing
+                if row and used + w > avail:
+                    rows.append(row)
+                    row, used = [], 0
+                row.append(btn)
+                used += w
+            if row:
+                rows.append(row)
+
+        while self.tab_grid.count():
+            self.tab_grid.takeAt(0)
+        max_cols = 0
+        for r, row_btns in enumerate(rows):
+            for c, btn in enumerate(row_btns):
+                self.tab_grid.addWidget(btn, r, c)
+            max_cols = max(max_cols, len(row_btns))
+        for c in range(max_cols + 1):
+            self.tab_grid.setColumnStretch(c, 0)
+        self.tab_grid.setColumnStretch(max_cols, 1)
+
+        self.title_bar.setFixedHeight(36 if len(rows) == 1 else len(rows) * 30 + 6)
+
+    def resizeEvent(self, event):
+        """窗口尺寸变化时重新排布 tab 按钮"""
+        super().resizeEvent(event)
+        self.relayout_tab_buttons()
 
     def toggle_topmost(self):
         """切换窗口置顶"""

@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QDialog, QLineEdit,
     QGroupBox, QFrame, QSplitter, QMenu, QAction, QSystemTrayIcon,
     QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox, QCheckBox,
-    QGridLayout, QInputDialog, QFileIconProvider, QPlainTextEdit
+    QGridLayout, QInputDialog, QFileIconProvider, QPlainTextEdit, QSpinBox
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
@@ -29,9 +29,11 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import (
     QFont, QColor, QPalette, QIcon, QPixmap, QPainter,
     QDragEnterEvent, QDropEvent, QMouseEvent, QCursor,
-    QLinearGradient, QBrush, QPen, QFontMetrics, QDrag
+    QLinearGradient, QBrush, QPen, QFontMetrics, QDrag,
+    QImage, QImageReader
 )
 import json
+import math
 import os
 import sys
 import subprocess
@@ -87,11 +89,30 @@ FOLDER_ACTION_BUTTON_SPACING = 4
 FOLDER_ACTION_ROW_RIGHT_INSET = 28
 FOLDER_ACTION_MIN_WIDTH = 50
 FOLDER_ACTION_HORIZONTAL_PADDING = 26
+try:
+    from PIL import Image, ImageOps
+    PILLOW_AVAILABLE = True
+except Exception:  # 未安装 Pillow 时回退到 Qt 的 QImage
+    Image = None
+    ImageOps = None
+    PILLOW_AVAILABLE = False
+
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
     ".tar.xz", ".txz", ".gz", ".bz2", ".xz", ".lz", ".lzma", ".zst",
     ".cab", ".iso", ".jar", ".war",
 )
+IMAGE_EXTENSIONS = (
+    ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".ico",
+)
+JPEG_EXTENSIONS = (".jpg", ".jpeg")
+SPLIT_MODE_AUTO = "auto"
+SPLIT_MODE_PARTS = "parts"
+DEFAULT_PIECE_UNIT = 1500  # 电商主图常用单份高度：1500 的整数倍，除不尽时补纯色
+QT_SAVE_FORMATS = {
+    ".jpg": "JPG", ".jpeg": "JPG", ".png": "PNG", ".bmp": "BMP",
+    ".webp": "WEBP", ".tif": "TIFF", ".tiff": "TIFF", ".gif": "GIF", ".ico": "ICO",
+}
 
 
 def folder_action_label(action_id: str) -> str:
@@ -1371,6 +1392,371 @@ class MergeWorker(QThread):
 
 
 # ============================================================
+# 图片批量处理核心逻辑（优先 Pillow，缺失时回退 QImage）
+# ============================================================
+
+def is_image_file(path: str) -> bool:
+    return os.path.isfile(path) and os.path.basename(path).lower().endswith(IMAGE_EXTENSIONS)
+
+
+def normalize_image_ext(ext: str) -> str:
+    """输出用的扩展名，缺失时退回 .jpg"""
+    return ext.lower() if ext else ".jpg"
+
+
+def unique_file_path(path: str) -> str:
+    """目标已存在时追加序号，避免覆盖"""
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    counter = 1
+    while os.path.exists(f"{base}_{counter}{ext}"):
+        counter += 1
+    return f"{base}_{counter}{ext}"
+
+
+def collect_image_files(paths: list) -> list:
+    """从路径列表里收集图片：文件直接收，文件夹收其下一层图片"""
+    files = []
+    seen = set()
+    for path in paths:
+        candidates = []
+        if is_image_file(path):
+            candidates = [path]
+        elif os.path.isdir(path):
+            try:
+                candidates = [
+                    os.path.join(path, name)
+                    for name in sorted(os.listdir(path))
+                    if is_image_file(os.path.join(path, name))
+                ]
+            except Exception as e:
+                print(f"读取图片文件夹失败: {path} -> {e}")
+        for candidate in candidates:
+            key = os.path.normcase(os.path.normpath(candidate))
+            if key not in seen:
+                seen.add(key)
+                files.append(os.path.normpath(candidate))
+    return files
+
+
+def load_image_pillow(path: str):
+    img = Image.open(path)
+    img.load()
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+    return img
+
+
+def save_image_pillow(img, dst: str):
+    ext = os.path.splitext(dst)[1].lower()
+    if ext in JPEG_EXTENSIONS:
+        if img.mode not in ("RGB", "L"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            source = img.convert("RGBA") if "A" in img.getbands() else img.convert("RGB")
+            background.paste(source, mask=source.split()[-1] if source.mode == "RGBA" else None)
+            img = background
+        img.save(dst, quality=95, subsampling=0)
+    else:
+        img.save(dst)
+
+
+def load_image_qt(path: str):
+    reader = QImageReader(path)
+    reader.setAutoTransform(True)
+    img = reader.read()
+    if img.isNull():
+        raise ValueError(f"无法读取图片: {os.path.basename(path)}")
+    return img
+
+
+def save_image_qt(img, dst: str):
+    ext = os.path.splitext(dst)[1].lower()
+    fmt = QT_SAVE_FORMATS.get(ext, "PNG")
+    quality = 95 if ext in JPEG_EXTENSIONS else -1
+    if not img.save(dst, fmt, quality):
+        raise ValueError(f"保存失败: {os.path.basename(dst)}")
+
+
+def read_image_size(path: str):
+    """读取图片尺寸 (width, height)，不解码整图"""
+    if PILLOW_AVAILABLE:
+        with Image.open(path) as img:
+            return img.size
+    reader = QImageReader(path)
+    reader.setAutoTransform(True)
+    size = reader.size()
+    if size.isValid():
+        return size.width(), size.height()
+    img = load_image_qt(path)
+    return img.width(), img.height()
+
+
+def auto_piece_count(height: int, unit: int) -> int:
+    """按单份目标高度自动判断份数（最后一份不足的部分补纯色）"""
+    unit = max(1, int(unit))
+    return max(1, math.ceil(height / unit))
+
+
+def build_split_plan(files: list, mode: str, parts: int, unit: int) -> list:
+    """生成切分计划：[(路径, 份数, 每份高度(固定份数模式为 None), 原图高度)]
+
+    mode=auto  → 每份等高 unit，最后一份不足的部分补纯色
+    mode=parts → 按指定份数等分，余量像素并入最后一份
+    """
+    plan = []
+    for path in files:
+        try:
+            _, height = read_image_size(path)
+        except Exception as e:
+            print(f"读取图片尺寸失败: {path} -> {e}")
+            continue
+        height = max(1, int(height))
+        if mode == SPLIT_MODE_AUTO:
+            piece_height = max(1, int(unit))
+            count = auto_piece_count(height, piece_height)
+        else:
+            piece_height = None
+            count = max(1, min(int(parts), height))
+        plan.append((path, count, piece_height, height))
+    return plan
+
+
+def pad_image_pillow(img, target_height: int, pad_color=(255, 255, 255)):
+    """在图片底部补纯色到指定高度"""
+    bands = img.getbands()
+    mode = "RGBA" if "A" in bands else "RGB"
+    fill = pad_color + (255,) if mode == "RGBA" else pad_color
+    canvas = Image.new(mode, (img.width, target_height), fill)
+    canvas.paste(img.convert(mode), (0, 0))
+    return canvas
+
+
+def pad_image_qt(img, target_height: int, pad_color=(255, 255, 255), ext: str = ".jpg"):
+    """在图片底部补纯色到指定高度（QImage 回退路径）"""
+    opaque_ext = ext.lower() in JPEG_EXTENSIONS
+    canvas = QImage(
+        img.width(),
+        target_height,
+        QImage.Format_RGB32 if opaque_ext else QImage.Format_RGBA8888,
+    )
+    canvas.fill(QColor(*pad_color))
+    painter = QPainter(canvas)
+    painter.drawImage(0, 0, img)
+    painter.end()
+    return canvas
+
+
+def split_image_vertically(
+    src: str,
+    output_dir: str,
+    pieces: int,
+    piece_height: int = None,
+    pad_color=(255, 255, 255),
+) -> list:
+    """把一张图纵向切开，输出 原名_1..N.ext，返回输出文件列表
+
+    piece_height 为 None  → 按份数等分，前 N-1 份等高，最后一份吸收余量像素
+    piece_height 给定     → 每份等高 piece_height，最后一份不足的部分补纯色
+    """
+    base, ext = os.path.splitext(os.path.basename(src))
+    ext = normalize_image_ext(ext)
+    outputs = []
+
+    if PILLOW_AVAILABLE:
+        img = load_image_pillow(src)
+        width, height = img.size
+        pieces = max(1, min(int(pieces), height))
+        if piece_height:
+            for i in range(pieces):
+                top = i * piece_height
+                crop_height = min(piece_height, height - top)
+                if crop_height <= 0:
+                    break
+                piece = img.crop((0, top, width, top + crop_height))
+                if crop_height < piece_height:
+                    piece = pad_image_pillow(piece, piece_height, pad_color)
+                dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
+                save_image_pillow(piece, dst)
+                outputs.append(dst)
+            return outputs
+
+        piece_height = height // pieces  # 等分高度，余量像素并入最后一份
+        for i in range(pieces):
+            top = i * piece_height
+            bottom = height if i == pieces - 1 else top + piece_height
+            piece = img.crop((0, top, width, bottom))
+            dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
+            save_image_pillow(piece, dst)
+            outputs.append(dst)
+        return outputs
+
+    # QImage 回退路径
+    img = load_image_qt(src)
+    width, height = img.width(), img.height()
+    pieces = max(1, min(int(pieces), height))
+    if piece_height:
+        for i in range(pieces):
+            top = i * piece_height
+            crop_height = min(piece_height, height - top)
+            if crop_height <= 0:
+                break
+            piece = img.copy(0, top, width, crop_height)
+            if crop_height < piece_height:
+                piece = pad_image_qt(piece, piece_height, pad_color, ext)
+            dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
+            save_image_qt(piece, dst)
+            outputs.append(dst)
+        return outputs
+
+    piece_height = height // pieces  # 等分高度，余量像素并入最后一份
+    for i in range(pieces):
+        top = i * piece_height
+        bottom = height if i == pieces - 1 else top + piece_height
+        piece = img.copy(0, top, width, bottom - top)
+        dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
+        save_image_qt(piece, dst)
+        outputs.append(dst)
+    return outputs
+
+
+def merge_images_vertically(files: list, output_dir: str) -> str:
+    """纵向合并多张图（宽度以第一张为准，其余等比缩放），返回输出文件路径"""
+    if not files:
+        raise ValueError("没有可合并的图片")
+
+    base, ext = os.path.splitext(os.path.basename(files[0]))
+    ext = normalize_image_ext(ext)
+    dst = unique_file_path(os.path.join(output_dir, f"{base}{ext}"))
+
+    if PILLOW_AVAILABLE:
+        images = [load_image_pillow(p) for p in files]
+        target_width = max(1, images[0].width)
+        prepared = []
+        for img in images:
+            if img.width != target_width:
+                new_height = max(1, round(img.height * target_width / img.width))
+                img = img.resize((target_width, new_height), Image.LANCZOS)
+            prepared.append(img.convert("RGB") if img.mode != "RGB" else img)
+        canvas = Image.new("RGB", (target_width, sum(i.height for i in prepared)), (255, 255, 255))
+        offset = 0
+        for img in prepared:
+            canvas.paste(img, (0, offset))
+            offset += img.height
+        save_image_pillow(canvas, dst)
+        return dst
+
+    # QImage 回退路径
+    images = [load_image_qt(p) for p in files]
+    target_width = max(1, images[0].width())
+    prepared = [
+        img if img.width() == target_width else img.scaledToWidth(target_width, Qt.SmoothTransformation)
+        for img in images
+    ]
+    canvas = QImage(target_width, sum(i.height() for i in prepared), QImage.Format_RGB32)
+    canvas.fill(QColor(255, 255, 255))
+    painter = QPainter(canvas)
+    offset = 0
+    for img in prepared:
+        painter.drawImage(0, offset, img)
+        offset += img.height()
+    painter.end()
+    save_image_qt(canvas, dst)
+    return dst
+
+
+class ImageProcessWorker(QThread):
+    """图片批量处理工作线程：纵向切分 / 纵向合并"""
+    MODE_SPLIT = "split"
+    MODE_MERGE = "merge"
+
+    progress = pyqtSignal(int, int, str)  # current, total, 文件名
+    finished = pyqtSignal(int, int, object)  # 成功数, 失败数, 输出文件列表
+    error = pyqtSignal(str)
+
+    def __init__(self, mode: str, files: list, output_dir: str, plan: list = None, parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self.files = list(files)
+        self.output_dir = output_dir
+        self.plan = list(plan or [])  # [(路径, 份数, 每份高度/None, 原图高度)]
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        errors = 0
+        outputs = []
+
+        if self.mode == self.MODE_SPLIT:
+            total = len(self.plan)
+            for i, (src, pieces, piece_height, _) in enumerate(self.plan):
+                if self._cancelled:
+                    break
+                try:
+                    outputs.extend(
+                        split_image_vertically(src, self.output_dir, pieces, piece_height)
+                    )
+                except Exception as e:
+                    errors += 1
+                    self.error.emit(f"切分失败 {os.path.basename(src)}: {e}")
+                self.progress.emit(i + 1, total, os.path.basename(src))
+            success = max(0, total - errors)
+        else:
+            try:
+                outputs.append(merge_images_vertically(self.files, self.output_dir))
+                success = 1
+            except Exception as e:
+                errors = 1
+                success = 0
+                self.error.emit(f"合并失败: {e}")
+            self.progress.emit(1, 1, os.path.basename(outputs[0]) if outputs else "合并")
+
+        self.finished.emit(success, errors, outputs)
+
+
+class ImageListWidget(QListWidget):
+    """支持外部拖入图片/文件夹的列表（内部可拖拽排序，决定合并顺序）"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QListWidget.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setSelectionMode(QListWidget.ExtendedSelection)
+        self._drop_callback = None
+
+    def set_drop_callback(self, callback):
+        self._drop_callback = callback
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            paths = [url.toLocalFile() for url in event.mimeData().urls()]
+            paths = [p for p in paths if p]
+            if paths and callable(self._drop_callback):
+                self._drop_callback(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+# ============================================================
 # 主窗口
 # ============================================================
 
@@ -1411,6 +1797,8 @@ class QuickFolderPanel(QMainWindow):
         self.sync_worker = None
         self.sync_target_loader = None
         self.sync_field_loader = None
+        self.image_worker = None
+        self.image_process_files = []
         self.sync_last_clipboard_text = ""
         self.sync_success_count = 0
         self.sync_failure_count = 0
@@ -1463,6 +1851,18 @@ class QuickFolderPanel(QMainWindow):
                 "extract_delete_archive": self.extract_delete_archive_check.isChecked()
                     if hasattr(self, "extract_delete_archive_check")
                     else self.config.get("extract_delete_archive", True),
+                "image_delete_source": self.image_delete_source_check.isChecked()
+                    if hasattr(self, "image_delete_source_check")
+                    else self.config.get("image_delete_source", False),
+                "image_split_mode": self.image_split_mode()
+                    if hasattr(self, "image_split_mode_combo")
+                    else self.config.get("image_split_mode", SPLIT_MODE_AUTO),
+                "image_split_unit": self.image_unit_spin.value()
+                    if hasattr(self, "image_unit_spin")
+                    else self.config.get("image_split_unit", DEFAULT_PIECE_UNIT),
+                "image_split_parts": self.image_parts_spin.value()
+                    if hasattr(self, "image_parts_spin")
+                    else self.config.get("image_split_parts", 2),
                 "merge_delete_source_folders": self.merge_delete_source_check.isChecked()
                     if hasattr(self, "merge_delete_source_check")
                     else self.config.get("merge_delete_source_folders", False),
@@ -1662,6 +2062,7 @@ class QuickFolderPanel(QMainWindow):
         self.folder_tab = self.create_folder_tab()
         self.merge_tab = self.create_merge_tab()
         self.extract_tab = self.create_extract_tab()
+        self.image_tab = self.create_image_tab()
         self.launch_tab = self.create_launch_tab()
         self.sync_tab = self.create_sync_tab()
         self.settings_tab = self.create_settings_tab()
@@ -1669,12 +2070,14 @@ class QuickFolderPanel(QMainWindow):
         self.content_layout.addWidget(self.folder_tab)
         self.content_layout.addWidget(self.merge_tab)
         self.content_layout.addWidget(self.extract_tab)
+        self.content_layout.addWidget(self.image_tab)
         self.content_layout.addWidget(self.launch_tab)
         self.content_layout.addWidget(self.sync_tab)
         self.content_layout.addWidget(self.settings_tab)
 
         # 恢复重建 UI 前所在的标签页。
-        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.launch_tab, self.sync_tab, self.settings_tab]
+        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.image_tab,
+                self.launch_tab, self.sync_tab, self.settings_tab]
         active_index = min(getattr(self, "current_tab_index", 0), len(tabs) - 1)
         for index, page in enumerate(tabs):
             page.setVisible(index == active_index)
@@ -1731,9 +2134,10 @@ class QuickFolderPanel(QMainWindow):
             ("📂 文件夹", 0),
             ("📁 合并", 1),
             ("📦 解压", 2),
-            ("🚀 启动", 3),
-            ("🔄 同步", 4),
-            ("⚙️ 设置", 5),
+            ("🖼 图片", 3),
+            ("🚀 启动", 4),
+            ("🔄 同步", 5),
+            ("⚙️ 设置", 6),
         ]
 
         for label, idx in tabs:
@@ -1778,7 +2182,8 @@ class QuickFolderPanel(QMainWindow):
     def switch_tab(self, index: int):
         """切换标签页"""
         self.current_tab_index = index
-        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.launch_tab, self.sync_tab, self.settings_tab]
+        tabs = [self.folder_tab, self.merge_tab, self.extract_tab, self.image_tab,
+                self.launch_tab, self.sync_tab, self.settings_tab]
         for i, tab in enumerate(tabs):
             tab.setVisible(i == index)
         for i, btn in enumerate(self.tab_buttons):
@@ -2131,6 +2536,165 @@ class QuickFolderPanel(QMainWindow):
         self.extract_progress.setVisible(False)
         layout.addWidget(self.extract_progress)
 
+        return tab
+
+    def create_image_tab(self) -> QWidget:
+        """创建图片批量处理标签页（纵向切分 / 纵向合并）"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # 标题和按钮
+        header = QHBoxLayout()
+        title = QLabel("🖼 图片处理")
+        title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        title.setStyleSheet(f"color: {self.theme['fg']};")
+        header.addWidget(title)
+        header.addStretch()
+
+        add_btn = QPushButton("🖼 添加图片")
+        add_btn.clicked.connect(self.image_add_files)
+        header.addWidget(add_btn)
+
+        folder_btn = QPushButton("📁 添加文件夹")
+        folder_btn.clicked.connect(self.image_add_folder)
+        header.addWidget(folder_btn)
+
+        paste_btn = QPushButton("📋 粘贴")
+        paste_btn.clicked.connect(self.image_paste)
+        header.addWidget(paste_btn)
+
+        clear_btn = QPushButton("🗑 清空")
+        clear_btn.clicked.connect(self.image_clear_list)
+        header.addWidget(clear_btn)
+
+        layout.addLayout(header)
+
+        # 图片列表（拖入 / 粘贴 / 内部排序，顺序即合并顺序）
+        self.image_list = ImageListWidget()
+        self.image_list.set_drop_callback(self.image_add_paths)
+        layout.addWidget(self.image_list, 1)
+
+        # 输出目录
+        output_layout = QHBoxLayout()
+        output_label = QLabel("输出到:")
+        output_label.setStyleSheet(f"color: {self.theme['fg']};")
+        output_layout.addWidget(output_label)
+
+        self.image_output_entry = QLineEdit()
+        self.image_output_entry.setPlaceholderText("默认图片所在目录")
+        output_layout.addWidget(self.image_output_entry, 1)
+
+        select_btn = QPushButton("📂 选择目录")
+        select_btn.setFixedSize(100, 30)
+        select_btn.clicked.connect(self.image_select_output)
+        output_layout.addWidget(select_btn)
+
+        layout.addLayout(output_layout)
+
+        # 选项行
+        option_layout = QHBoxLayout()
+
+        parts_label = QLabel("切分:")
+        parts_label.setStyleSheet(f"color: {self.theme['fg']};")
+        option_layout.addWidget(parts_label)
+
+        self.image_split_mode_combo = QComboBox()
+        self.image_split_mode_combo.addItem(f"自动（每份 {DEFAULT_PIECE_UNIT}px）", SPLIT_MODE_AUTO)
+        self.image_split_mode_combo.addItem("固定份数", SPLIT_MODE_PARTS)
+        self.image_split_mode_combo.setFixedWidth(140)
+        saved_mode = self.config.get("image_split_mode", SPLIT_MODE_AUTO)
+        self.image_split_mode_combo.setCurrentIndex(1 if saved_mode == SPLIT_MODE_PARTS else 0)
+        self.image_split_mode_combo.currentIndexChanged.connect(self.on_image_option_changed)
+        option_layout.addWidget(self.image_split_mode_combo)
+
+        self.image_unit_spin = QSpinBox()
+        self.image_unit_spin.setRange(100, 10000)
+        self.image_unit_spin.setSingleStep(50)
+        self.image_unit_spin.setValue(int(self.config.get("image_split_unit", DEFAULT_PIECE_UNIT) or DEFAULT_PIECE_UNIT))
+        self.image_unit_spin.setFixedWidth(70)
+        self.image_unit_spin.setSuffix("px")
+        self.image_unit_spin.setStyleSheet(f"color: {self.theme['fg']};")
+        self.image_unit_spin.valueChanged.connect(self.on_image_option_changed)
+        option_layout.addWidget(self.image_unit_spin)
+
+        self.image_parts_spin = QSpinBox()
+        self.image_parts_spin.setRange(2, 50)
+        self.image_parts_spin.setValue(int(self.config.get("image_split_parts", 2) or 2))
+        self.image_parts_spin.setFixedWidth(52)
+        self.image_parts_spin.setSuffix("份")
+        self.image_parts_spin.setStyleSheet(f"color: {self.theme['fg']};")
+        self.image_parts_spin.valueChanged.connect(self.on_image_option_changed)
+        option_layout.addWidget(self.image_parts_spin)
+
+        option_layout.addSpacing(6)
+
+        self.image_delete_source_check = QCheckBox("删除原图")
+        self.image_delete_source_check.setChecked(bool(self.config.get("image_delete_source", False)))
+        self.image_delete_source_check.setStyleSheet(f"color: {self.theme['fg']};")
+        self.image_delete_source_check.stateChanged.connect(lambda _: self.save_config())
+        option_layout.addWidget(self.image_delete_source_check)
+
+        option_layout.addStretch()
+
+        action_btn_style = f"""
+            QPushButton {{
+                background-color: {self.theme['accent']};
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {self.theme['accent_hover']};
+            }}
+            QPushButton:disabled {{
+                background-color: {self.theme['tab_inactive']};
+                color: {self.theme['gray']};
+            }}
+        """
+
+        # 预览信息 + 操作按钮行
+        action_layout = QHBoxLayout()
+
+        self.image_preview_label = QLabel("")
+        self.image_preview_label.setWordWrap(True)
+        self.image_preview_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        action_layout.addWidget(self.image_preview_label, 1)
+
+        self.image_split_btn = QPushButton("✂ 批量拆分")
+        self.image_split_btn.setFixedSize(96, 30)
+        self.image_split_btn.setStyleSheet(action_btn_style)
+        self.image_split_btn.clicked.connect(self.image_start_split)
+        action_layout.addWidget(self.image_split_btn)
+
+        self.image_merge_btn = QPushButton("⇅ 批量合并")
+        self.image_merge_btn.setFixedSize(96, 30)
+        self.image_merge_btn.setStyleSheet(action_btn_style)
+        self.image_merge_btn.clicked.connect(self.image_start_merge)
+        action_layout.addWidget(self.image_merge_btn)
+
+        layout.addLayout(option_layout)
+        layout.addLayout(action_layout)
+
+        if not PILLOW_AVAILABLE:
+            warn_label = QLabel("⚠ 未检测到 Pillow，已使用内置图像后端（不支持 webp）")
+            warn_label.setStyleSheet(f"color: {self.theme['gold']}; font-size: 11px;")
+            layout.addWidget(warn_label)
+
+        # 进度信息
+        self.image_progress_label = QLabel("")
+        self.image_progress_label.setWordWrap(True)
+        self.image_progress_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        layout.addWidget(self.image_progress_label)
+
+        # 进度条
+        self.image_progress = QProgressBar()
+        self.image_progress.setVisible(False)
+        layout.addWidget(self.image_progress)
+
+        # 初始化控件可用状态与预览（此处不落盘配置）
+        self.image_sync_controls()
+        self.update_image_preview()
         return tab
 
     def create_sync_tab(self) -> QWidget:
@@ -3215,20 +3779,31 @@ class QuickFolderPanel(QMainWindow):
         if not files:
             return
 
-        if getattr(self, "current_tab_index", 0) == 3:
+        if getattr(self, "current_tab_index", 0) == 4:
             self.add_launch_items_from_drop([f for f in files if os.path.isfile(f)])
+            event.acceptProposedAction()
+            return
+
+        if getattr(self, "current_tab_index", 0) == 3:
+            self.image_add_paths(files)
+            self.switch_tab(3)
             event.acceptProposedAction()
             return
 
         folders = [f for f in files if os.path.isdir(f)]
         archive_exts = ('.zip', '.rar', '.7z', '.tar', '.tar.gz', '.tgz', '.tar.bz2')
         archive_files = [f for f in files if os.path.isfile(f) and f.lower().endswith(archive_exts)]
+        image_files = [f for f in files if is_image_file(f)]
 
         if folders:
             # 有文件夹 → 切换到合并 tab，添加文件夹
             self.switch_tab(1)
             for f in folders:
                 self.merge_add_folder_path(f)
+        elif image_files and not archive_files:
+            # 纯图片文件 → 切换到图片 tab
+            self.switch_tab(3)
+            self.image_add_paths(image_files)
         elif archive_files:
             # 有压缩文件 → 切换到解压 tab
             self.switch_tab(2)
@@ -3295,10 +3870,13 @@ class QuickFolderPanel(QMainWindow):
     def closeEvent(self, event):
         """窗口关闭事件"""
         self.stop_sync_monitoring(wait_ms=6500)
-        for worker in (self.sync_target_loader, self.sync_field_loader):
+        for worker in (self.sync_target_loader, self.sync_field_loader, self.image_worker):
             if worker is not None and worker.isRunning():
                 worker.cancel()
                 worker.wait(6500)
+        if self.merge_worker and self.merge_worker.isRunning():
+            self.merge_worker.cancel()
+            self.merge_worker.wait(6500)
         self.save_config()
         event.accept()
 
@@ -3726,6 +4304,250 @@ class QuickFolderPanel(QMainWindow):
                 seen.add(key)
                 unique.append((cmd, kind))
         return unique
+
+    # ============================================================
+    # 图片批量处理功能
+    # ============================================================
+
+    def image_add_paths(self, paths: list):
+        """添加图片文件 / 图片文件夹到列表"""
+        files = collect_image_files(paths)
+        added = 0
+        for file_path in files:
+            if self.image_list_contains(file_path):
+                continue
+            self.image_add_item(file_path)
+            added += 1
+        if added:
+            self.update_image_output_suggestion()
+            self.update_image_preview()
+        return added
+
+    def image_list_contains(self, path: str) -> bool:
+        key = os.path.normcase(os.path.normpath(path))
+        for i in range(self.image_list.count()):
+            existing = self.image_list.item(i).data(Qt.UserRole)
+            if existing and os.path.normcase(os.path.normpath(existing)) == key:
+                return True
+        return False
+
+    def image_add_item(self, path: str):
+        name = os.path.basename(path)
+        parent = os.path.dirname(path)
+        item = QListWidgetItem(f"🖼 {name}  ({parent})")
+        item.setData(Qt.UserRole, path)
+        item.setToolTip(path)
+        self.image_list.addItem(item)
+
+    def image_current_files(self) -> list:
+        files = []
+        for i in range(self.image_list.count()):
+            path = self.image_list.item(i).data(Qt.UserRole)
+            if path and os.path.isfile(path):
+                files.append(path)
+        return files
+
+    def image_add_files(self):
+        """选择图片文件"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "选择图片", "",
+            "图片文件 (*.jpg *.jpeg *.png *.bmp *.gif *.webp *.tif *.tiff *.ico);;所有文件 (*)"
+        )
+        self.image_add_paths(files)
+
+    def image_add_folder(self):
+        """选择一个文件夹（收取其下一层图片）"""
+        path = QFileDialog.getExistingDirectory(self, "选择图片文件夹")
+        if path:
+            self.image_add_paths([path])
+
+    def image_paste(self):
+        """从剪贴板粘贴图片文件或文件夹"""
+        paths = self.clipboard_local_paths()
+        files = collect_image_files(paths)
+        before = self.image_list.count()
+        for file_path in files:
+            if not self.image_list_contains(file_path):
+                self.image_add_item(file_path)
+        added = self.image_list.count() - before
+        if added == 0:
+            if files:
+                QMessageBox.information(self, "提示", "剪贴板中的图片已在列表中")
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有图片文件或图片文件夹")
+        else:
+            self.update_image_output_suggestion()
+            self.update_image_preview()
+
+    def image_clear_list(self):
+        """清空图片列表"""
+        self.image_list.clear()
+        self.image_output_entry.clear()
+        self.update_image_preview()
+
+    def image_clear_list(self):
+        """清空图片列表"""
+        self.image_list.clear()
+        self.image_output_entry.clear()
+
+    def image_select_output(self):
+        """选择输出目录"""
+        path = QFileDialog.getExistingDirectory(self, "选择输出目录")
+        if path:
+            self.image_output_entry.setText(path)
+
+    def update_image_output_suggestion(self):
+        """输出目录为空时，默认使用第一张图片所在目录"""
+        if self.image_output_entry.text().strip():
+            return
+        files = self.image_current_files()
+        if files:
+            self.image_output_entry.setText(os.path.dirname(files[0]))
+
+    def image_resolve_output(self) -> str:
+        output = self.image_output_entry.text().strip()
+        if not output:
+            files = self.image_current_files()
+            if files:
+                output = os.path.dirname(files[0])
+            else:
+                output = os.path.expanduser("~/Desktop")
+        self.image_output_entry.setText(output)
+        return output
+
+    def image_set_busy(self, busy: bool):
+        self.image_split_btn.setEnabled(not busy)
+        self.image_merge_btn.setEnabled(not busy)
+        self.image_progress.setVisible(busy)
+
+    def image_split_mode(self) -> str:
+        return self.image_split_mode_combo.currentData() or SPLIT_MODE_AUTO
+
+    def image_unit_value(self) -> int:
+        return max(1, int(self.image_unit_spin.value() or DEFAULT_PIECE_UNIT))
+
+    def on_image_option_changed(self, _value=None):
+        """切分选项变化时同步控件可用性与预览，并保存配置"""
+        self.image_sync_controls()
+        self.update_image_preview()
+        self.save_config()
+
+    def image_sync_controls(self):
+        """按当前切分模式同步控件可用状态（不触发保存，可在 UI 构建阶段调用）"""
+        auto_mode = self.image_split_mode() == SPLIT_MODE_AUTO
+        self.image_unit_spin.setEnabled(auto_mode)
+        self.image_parts_spin.setEnabled(not auto_mode)
+        self.image_unit_spin.setToolTip("每份的目标高度，最后一份不足的部分补白色")
+        self.image_parts_spin.setToolTip("按份数等分，尾部余量像素并入最后一份，不丢弃像素")
+
+    def update_image_preview(self):
+        """更新批次预览：共几张图、切成几份"""
+        files = self.image_current_files()
+        if not files:
+            self.image_preview_label.setText("拖入或粘贴图片 / 图片文件夹")
+            return
+        if self.image_split_mode() == SPLIT_MODE_AUTO:
+            self.image_preview_label.setText(
+                f"已选 {len(files)} 张 → 每张独立纵向切分，每份 {self.image_unit_value()}px，"
+                f"最后一份不足时补白色（命名：原名_序号）"
+            )
+        else:
+            parts = max(1, self.image_parts_spin.value())
+            self.image_preview_label.setText(
+                f"已选 {len(files)} 张 → 每张独立纵向等分 {parts} 份，余量像素并入最后一份"
+            )
+
+    def image_run(self, mode: str, files: list, plan: list = None):
+        if self.image_worker and self.image_worker.isRunning():
+            QMessageBox.information(self, "提示", "正在处理中，请稍候")
+            return
+
+        output = self.image_resolve_output()
+        os.makedirs(output, exist_ok=True)
+
+        self.image_process_files = list(files)
+        tasks = plan if plan is not None else []
+        self.image_worker = ImageProcessWorker(mode, files, output, tasks)
+        self.image_worker.progress.connect(self.on_image_progress)
+        self.image_worker.error.connect(self.on_image_error)
+        self.image_worker.finished.connect(self.on_image_finished)
+        self.image_set_busy(True)
+        if mode == ImageProcessWorker.MODE_SPLIT:
+            self.image_progress.setMaximum(max(1, len(tasks)))
+            batch_label = f"切分 {len(files)} 张 → {sum(t[1] for t in tasks)} 份"
+        else:
+            self.image_progress.setMaximum(1)
+            batch_label = f"合并 {len(files)} 张 → 1 张"
+        self.image_progress.setValue(0)
+        self.image_progress_label.setText(batch_label)
+        self.image_worker.start()
+
+    def image_start_split(self):
+        """批量纵向切分（每张原图独立处理，不做图片之间的合并）"""
+        files = self.image_current_files()
+        if not files:
+            QMessageBox.warning(self, "提示", "请先添加要切分的图片")
+            return
+        plan = build_split_plan(
+            files,
+            self.image_split_mode(),
+            self.image_parts_spin.value(),
+            self.image_unit_value(),
+        )
+        if not plan:
+            QMessageBox.warning(self, "提示", "没有可读取的图片")
+            return
+        self.image_run(ImageProcessWorker.MODE_SPLIT, files, plan)
+
+    def image_start_merge(self):
+        """批量纵向合并"""
+        files = self.image_current_files()
+        if len(files) < 2:
+            QMessageBox.warning(self, "提示", "至少需要 2 张图片才能合并")
+            return
+        self.image_run(ImageProcessWorker.MODE_MERGE, files)
+
+    def on_image_progress(self, current: int, total: int, name: str):
+        self.image_progress.setMaximum(max(1, total))
+        self.image_progress.setValue(current)
+
+    def on_image_error(self, message: str):
+        print(f"图片处理失败: {message}")
+
+    def on_image_finished(self, success: int, errors: int, outputs: list):
+        self.image_set_busy(False)
+        self.image_progress_label.setText("")
+        deleted = 0
+        delete_errors = 0
+        output_dir = self.image_output_entry.text().strip()
+
+        if errors == 0 and self.image_delete_source_check.isChecked():
+            for path in self.image_process_files:
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                        deleted += 1
+                except Exception as e:
+                    delete_errors += 1
+                    print(f"删除原图失败: {path} -> {e}")
+
+        msg = f"成功处理 {success} 项"
+        if errors:
+            msg += f"，失败 {errors} 项（详见控制台）"
+        if outputs:
+            first = os.path.basename(outputs[0])
+            msg += f"\n输出: {first}" + (f" 等 {len(outputs)} 个文件" if len(outputs) > 1 else "")
+        if deleted:
+            msg += f"\n已删除原图 {deleted} 个"
+        if delete_errors:
+            msg += f"\n{delete_errors} 个原图删除失败"
+
+        if errors == 0:
+            self.image_clear_list()
+        QMessageBox.information(self, "完成", msg)
+
+        if success > 0 and output_dir and os.path.isdir(output_dir) and sys.platform == "win32":
+            os.startfile(output_dir)
 
 
 # ============================================================

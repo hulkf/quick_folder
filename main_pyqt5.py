@@ -19,12 +19,12 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QDialog, QLineEdit,
     QGroupBox, QFrame, QSplitter, QMenu, QAction, QSystemTrayIcon,
     QStyle, QDesktopWidget, QScrollArea, QSizePolicy, QComboBox, QCheckBox,
-    QGridLayout, QInputDialog, QFileIconProvider, QPlainTextEdit, QSpinBox
+    QGridLayout, QInputDialog, QFileIconProvider, QPlainTextEdit
 )
 from PyQt5.QtCore import (
     Qt, QSize, QPoint, QTimer, QThread, pyqtSignal, QMimeData,
     QUrl, QPropertyAnimation, QEasingCurve, QObject, QEvent,
-    QCoreApplication, QFileInfo
+    QCoreApplication, QFileInfo, QThreadPool, QRunnable
 )
 from PyQt5.QtGui import (
     QFont, QColor, QPalette, QIcon, QPixmap, QPainter,
@@ -106,9 +106,6 @@ IMAGE_EXTENSIONS = (
     ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".ico",
 )
 JPEG_EXTENSIONS = (".jpg", ".jpeg")
-SPLIT_MODE_AUTO = "auto"
-SPLIT_MODE_PARTS = "parts"
-DEFAULT_PIECE_UNIT = 1500  # 电商主图常用单份高度：1500 的整数倍，除不尽时补纯色
 QT_SAVE_FORMATS = {
     ".jpg": "JPG", ".jpeg": "JPG", ".png": "PNG", ".bmp": "BMP",
     ".webp": "WEBP", ".tif": "TIFF", ".tiff": "TIFF", ".gif": "GIF", ".ico": "ICO",
@@ -1480,86 +1477,11 @@ def save_image_qt(img, dst: str):
         raise ValueError(f"保存失败: {os.path.basename(dst)}")
 
 
-def read_image_size(path: str):
-    """读取图片尺寸 (width, height)，不解码整图"""
-    if PILLOW_AVAILABLE:
-        with Image.open(path) as img:
-            return img.size
-    reader = QImageReader(path)
-    reader.setAutoTransform(True)
-    size = reader.size()
-    if size.isValid():
-        return size.width(), size.height()
-    img = load_image_qt(path)
-    return img.width(), img.height()
+def split_image_vertically(src: str, output_dir: str, pieces: int) -> list:
+    """把一张图纵向等分切开，输出 原名_1..N.ext，返回输出文件列表
 
-
-def auto_piece_count(height: int, unit: int) -> int:
-    """按单份目标高度自动判断份数（最后一份不足的部分补纯色）"""
-    unit = max(1, int(unit))
-    return max(1, math.ceil(height / unit))
-
-
-def build_split_plan(files: list, mode: str, parts: int, unit: int) -> list:
-    """生成切分计划：[(路径, 份数, 每份高度(固定份数模式为 None), 原图高度)]
-
-    mode=auto  → 每份等高 unit，最后一份不足的部分补纯色
-    mode=parts → 按指定份数等分，余量像素并入最后一份
-    """
-    plan = []
-    for path in files:
-        try:
-            _, height = read_image_size(path)
-        except Exception as e:
-            print(f"读取图片尺寸失败: {path} -> {e}")
-            continue
-        height = max(1, int(height))
-        if mode == SPLIT_MODE_AUTO:
-            piece_height = max(1, int(unit))
-            count = auto_piece_count(height, piece_height)
-        else:
-            piece_height = None
-            count = max(1, min(int(parts), height))
-        plan.append((path, count, piece_height, height))
-    return plan
-
-
-def pad_image_pillow(img, target_height: int, pad_color=(255, 255, 255)):
-    """在图片底部补纯色到指定高度"""
-    bands = img.getbands()
-    mode = "RGBA" if "A" in bands else "RGB"
-    fill = pad_color + (255,) if mode == "RGBA" else pad_color
-    canvas = Image.new(mode, (img.width, target_height), fill)
-    canvas.paste(img.convert(mode), (0, 0))
-    return canvas
-
-
-def pad_image_qt(img, target_height: int, pad_color=(255, 255, 255), ext: str = ".jpg"):
-    """在图片底部补纯色到指定高度（QImage 回退路径）"""
-    opaque_ext = ext.lower() in JPEG_EXTENSIONS
-    canvas = QImage(
-        img.width(),
-        target_height,
-        QImage.Format_RGB32 if opaque_ext else QImage.Format_RGBA8888,
-    )
-    canvas.fill(QColor(*pad_color))
-    painter = QPainter(canvas)
-    painter.drawImage(0, 0, img)
-    painter.end()
-    return canvas
-
-
-def split_image_vertically(
-    src: str,
-    output_dir: str,
-    pieces: int,
-    piece_height: int = None,
-    pad_color=(255, 255, 255),
-) -> list:
-    """把一张图纵向切开，输出 原名_1..N.ext，返回输出文件列表
-
-    piece_height 为 None  → 按份数等分，前 N-1 份等高，最后一份吸收余量像素
-    piece_height 给定     → 每份等高 piece_height，最后一份不足的部分补纯色
+    不能整除时按边界取整（height*i//pieces），最后一份略少或略多 1 像素，
+    不做任何填充：所有切片按顺序拼回去正好是原图，不丢像素也不多像素。
     """
     base, ext = os.path.splitext(os.path.basename(src))
     ext = normalize_image_ext(ext)
@@ -1569,24 +1491,9 @@ def split_image_vertically(
         img = load_image_pillow(src)
         width, height = img.size
         pieces = max(1, min(int(pieces), height))
-        if piece_height:
-            for i in range(pieces):
-                top = i * piece_height
-                crop_height = min(piece_height, height - top)
-                if crop_height <= 0:
-                    break
-                piece = img.crop((0, top, width, top + crop_height))
-                if crop_height < piece_height:
-                    piece = pad_image_pillow(piece, piece_height, pad_color)
-                dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
-                save_image_pillow(piece, dst)
-                outputs.append(dst)
-            return outputs
-
-        piece_height = height // pieces  # 等分高度，余量像素并入最后一份
         for i in range(pieces):
-            top = i * piece_height
-            bottom = height if i == pieces - 1 else top + piece_height
+            top = height * i // pieces
+            bottom = height * (i + 1) // pieces
             piece = img.crop((0, top, width, bottom))
             dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
             save_image_pillow(piece, dst)
@@ -1597,28 +1504,14 @@ def split_image_vertically(
     img = load_image_qt(src)
     width, height = img.width(), img.height()
     pieces = max(1, min(int(pieces), height))
-    if piece_height:
-        for i in range(pieces):
-            top = i * piece_height
-            crop_height = min(piece_height, height - top)
-            if crop_height <= 0:
-                break
-            piece = img.copy(0, top, width, crop_height)
-            if crop_height < piece_height:
-                piece = pad_image_qt(piece, piece_height, pad_color, ext)
-            dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
-            save_image_qt(piece, dst)
-            outputs.append(dst)
-        return outputs
-
-    piece_height = height // pieces  # 等分高度，余量像素并入最后一份
     for i in range(pieces):
-        top = i * piece_height
-        bottom = height if i == pieces - 1 else top + piece_height
+        top = height * i // pieces
+        bottom = height * (i + 1) // pieces
         piece = img.copy(0, top, width, bottom - top)
         dst = unique_file_path(os.path.join(output_dir, f"{base}_{i + 1}{ext}"))
         save_image_qt(piece, dst)
         outputs.append(dst)
+    return outputs
     return outputs
 
 
@@ -1676,12 +1569,12 @@ class ImageProcessWorker(QThread):
     finished = pyqtSignal(int, int, object)  # 成功数, 失败数, 输出文件列表
     error = pyqtSignal(str)
 
-    def __init__(self, mode: str, files: list, output_dir: str, plan: list = None, parent=None):
+    def __init__(self, mode: str, files: list, output_dir: str, parts: int = 2, parent=None):
         super().__init__(parent)
         self.mode = mode
         self.files = list(files)
         self.output_dir = output_dir
-        self.plan = list(plan or [])  # [(路径, 份数, 每份高度/None, 原图高度)]
+        self.parts = max(1, int(parts))
         self._cancelled = False
 
     def cancel(self):
@@ -1692,14 +1585,12 @@ class ImageProcessWorker(QThread):
         outputs = []
 
         if self.mode == self.MODE_SPLIT:
-            total = len(self.plan)
-            for i, (src, pieces, piece_height, _) in enumerate(self.plan):
+            total = len(self.files)
+            for i, src in enumerate(self.files):
                 if self._cancelled:
                     break
                 try:
-                    outputs.extend(
-                        split_image_vertically(src, self.output_dir, pieces, piece_height)
-                    )
+                    outputs.extend(split_image_vertically(src, self.output_dir, self.parts))
                 except Exception as e:
                     errors += 1
                     self.error.emit(f"切分失败 {os.path.basename(src)}: {e}")
@@ -1716,6 +1607,27 @@ class ImageProcessWorker(QThread):
             self.progress.emit(1, 1, os.path.basename(outputs[0]) if outputs else "合并")
 
         self.finished.emit(success, errors, outputs)
+
+
+class _WorkerReaper(QRunnable):
+    """在后台线程里等待 worker 退出，避免关闭窗口时阻塞主线程。
+
+    超时只用于兜底：即使某个 worker 一直不退出，也是后台线程在等，
+    且 QThreadPool 的线程是 daemon，不会拖住进程退出。
+    """
+
+    def __init__(self, workers: list, wait_ms: int = 4000):
+        super().__init__()
+        self._workers = list(workers)
+        self._wait_ms = wait_ms
+
+    def run(self):
+        for worker in self._workers:
+            try:
+                if worker.isRunning():
+                    worker.wait(self._wait_ms)
+            except RuntimeError:
+                continue
 
 
 class ImageListWidget(QListWidget):
@@ -1799,6 +1711,13 @@ class QuickFolderPanel(QMainWindow):
         self.sync_field_loader = None
         self.image_worker = None
         self.image_process_files = []
+        # 关闭时要遍历所有 worker，必须在这里全部初始化为 None：
+        # 否则从未执行过对应功能时属性不存在，closeEvent 会抛 AttributeError，
+        # 关闭流程中断，窗口就卡住退不出去。
+        self.merge_worker = None
+        self.copy_worker = None
+        self.extract_worker = None
+        self._closing = False
         self.sync_last_clipboard_text = ""
         self.sync_success_count = 0
         self.sync_failure_count = 0
@@ -1854,14 +1773,8 @@ class QuickFolderPanel(QMainWindow):
                 "image_delete_source": self.image_delete_source_check.isChecked()
                     if hasattr(self, "image_delete_source_check")
                     else self.config.get("image_delete_source", False),
-                "image_split_mode": self.image_split_mode()
-                    if hasattr(self, "image_split_mode_combo")
-                    else self.config.get("image_split_mode", SPLIT_MODE_AUTO),
-                "image_split_unit": self.image_unit_spin.value()
-                    if hasattr(self, "image_unit_spin")
-                    else self.config.get("image_split_unit", DEFAULT_PIECE_UNIT),
-                "image_split_parts": self.image_parts_spin.value()
-                    if hasattr(self, "image_parts_spin")
+                "image_split_parts": self.image_parts_value()
+                    if hasattr(self, "image_parts_entry")
                     else self.config.get("image_split_parts", 2),
                 "merge_delete_source_folders": self.merge_delete_source_check.isChecked()
                     if hasattr(self, "merge_delete_source_check")
@@ -2592,40 +2505,22 @@ class QuickFolderPanel(QMainWindow):
 
         layout.addLayout(output_layout)
 
-        # 选项行
+        # 选项行：切分份数（输入框）+ 删除原图 + 拆分/合并按钮
         option_layout = QHBoxLayout()
 
-        parts_label = QLabel("切分:")
+        parts_label = QLabel("切分份数:")
         parts_label.setStyleSheet(f"color: {self.theme['fg']};")
         option_layout.addWidget(parts_label)
 
-        self.image_split_mode_combo = QComboBox()
-        self.image_split_mode_combo.addItem(f"自动（每份 {DEFAULT_PIECE_UNIT}px）", SPLIT_MODE_AUTO)
-        self.image_split_mode_combo.addItem("固定份数", SPLIT_MODE_PARTS)
-        self.image_split_mode_combo.setFixedWidth(140)
-        saved_mode = self.config.get("image_split_mode", SPLIT_MODE_AUTO)
-        self.image_split_mode_combo.setCurrentIndex(1 if saved_mode == SPLIT_MODE_PARTS else 0)
-        self.image_split_mode_combo.currentIndexChanged.connect(self.on_image_option_changed)
-        option_layout.addWidget(self.image_split_mode_combo)
-
-        self.image_unit_spin = QSpinBox()
-        self.image_unit_spin.setRange(100, 10000)
-        self.image_unit_spin.setSingleStep(50)
-        self.image_unit_spin.setValue(int(self.config.get("image_split_unit", DEFAULT_PIECE_UNIT) or DEFAULT_PIECE_UNIT))
-        self.image_unit_spin.setFixedWidth(70)
-        self.image_unit_spin.setSuffix("px")
-        self.image_unit_spin.setStyleSheet(f"color: {self.theme['fg']};")
-        self.image_unit_spin.valueChanged.connect(self.on_image_option_changed)
-        option_layout.addWidget(self.image_unit_spin)
-
-        self.image_parts_spin = QSpinBox()
-        self.image_parts_spin.setRange(2, 50)
-        self.image_parts_spin.setValue(int(self.config.get("image_split_parts", 2) or 2))
-        self.image_parts_spin.setFixedWidth(52)
-        self.image_parts_spin.setSuffix("份")
-        self.image_parts_spin.setStyleSheet(f"color: {self.theme['fg']};")
-        self.image_parts_spin.valueChanged.connect(self.on_image_option_changed)
-        option_layout.addWidget(self.image_parts_spin)
+        self.image_parts_entry = QLineEdit()
+        self.image_parts_entry.setFixedWidth(56)
+        self.image_parts_entry.setAlignment(Qt.AlignCenter)
+        self.image_parts_entry.setText(str(self.config.get("image_split_parts", 2) or 2))
+        self.image_parts_entry.setStyleSheet(f"color: {self.theme['fg']};")
+        self.image_parts_entry.setToolTip("纵向等分；不能整除时最后一份略少或略多 1 像素，拼回去正好是原图")
+        self.image_parts_entry.textChanged.connect(lambda _: self.save_config())
+        self.image_parts_entry.editingFinished.connect(self.on_image_option_changed)
+        option_layout.addWidget(self.image_parts_entry)
 
         option_layout.addSpacing(6)
 
@@ -2653,28 +2548,19 @@ class QuickFolderPanel(QMainWindow):
             }}
         """
 
-        # 预览信息 + 操作按钮行
-        action_layout = QHBoxLayout()
-
-        self.image_preview_label = QLabel("")
-        self.image_preview_label.setWordWrap(True)
-        self.image_preview_label.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
-        action_layout.addWidget(self.image_preview_label, 1)
-
         self.image_split_btn = QPushButton("✂ 批量拆分")
         self.image_split_btn.setFixedSize(96, 30)
         self.image_split_btn.setStyleSheet(action_btn_style)
         self.image_split_btn.clicked.connect(self.image_start_split)
-        action_layout.addWidget(self.image_split_btn)
+        option_layout.addWidget(self.image_split_btn)
 
         self.image_merge_btn = QPushButton("⇅ 批量合并")
         self.image_merge_btn.setFixedSize(96, 30)
         self.image_merge_btn.setStyleSheet(action_btn_style)
         self.image_merge_btn.clicked.connect(self.image_start_merge)
-        action_layout.addWidget(self.image_merge_btn)
+        option_layout.addWidget(self.image_merge_btn)
 
         layout.addLayout(option_layout)
-        layout.addLayout(action_layout)
 
         if not PILLOW_AVAILABLE:
             warn_label = QLabel("⚠ 未检测到 Pillow，已使用内置图像后端（不支持 webp）")
@@ -2692,9 +2578,6 @@ class QuickFolderPanel(QMainWindow):
         self.image_progress.setVisible(False)
         layout.addWidget(self.image_progress)
 
-        # 初始化控件可用状态与预览（此处不落盘配置）
-        self.image_sync_controls()
-        self.update_image_preview()
         return tab
 
     def create_sync_tab(self) -> QWidget:
@@ -2993,6 +2876,8 @@ class QuickFolderPanel(QMainWindow):
         field_loading = self.sync_field_loader is not None and self.sync_field_loader.isRunning()
         worker_stopping = self.sync_worker is not None and self.sync_worker.isRunning() and not self.sync_monitoring
         controls_enabled = not self.sync_monitoring and not target_loading and not field_loading and not worker_stopping
+        if getattr(self, "_closing", False):
+            controls_enabled = False
         self.sync_document_entry.setEnabled(controls_enabled)
         self.sync_table_combo.setEnabled(controls_enabled)
         self.sync_field_combo.setEnabled(controls_enabled)
@@ -3004,7 +2889,7 @@ class QuickFolderPanel(QMainWindow):
 
     def _handle_new_clipboard_text(self, text: str):
         """去重后把新的剪贴板文本交给同步线程（信号触发与轮询共用）。"""
-        if not self.sync_monitoring or self.sync_worker is None:
+        if getattr(self, "_closing", False) or not self.sync_monitoring or self.sync_worker is None:
             return
         if not text or text == self.sync_last_clipboard_text:
             return
@@ -3047,7 +2932,7 @@ class QuickFolderPanel(QMainWindow):
         部分跨设备互联工具（如小米互联）写入系统剪贴板时，Qt 可能
         收不到剪贴板变化通知，定时轮询可以保证这类内容也能被发现。
         """
-        if not self.sync_monitoring or self.sync_worker is None:
+        if getattr(self, "_closing", False) or not self.sync_monitoring or self.sync_worker is None:
             return
         text = QApplication.clipboard().text()
         self._handle_new_clipboard_text(text)
@@ -3868,17 +3753,74 @@ class QuickFolderPanel(QMainWindow):
         return files
 
     def closeEvent(self, event):
-        """窗口关闭事件"""
-        self.stop_sync_monitoring(wait_ms=6500)
-        for worker in (self.sync_target_loader, self.sync_field_loader, self.image_worker):
-            if worker is not None and worker.isRunning():
-                worker.cancel()
-                worker.wait(6500)
-        if self.merge_worker and self.merge_worker.isRunning():
-            self.merge_worker.cancel()
-            self.merge_worker.wait(6500)
-        self.save_config()
+        """窗口关闭事件：立刻收尾并放行关闭，线程留给后台线程池托管
+
+        关闭时的卡顿来自在主线程里等待正在跑的 worker：
+        飞书同步若正在执行 lark-cli 请求，stop() 只能设置取消标志，
+        要等子进程被 taskkill 掉（或 35 秒超时）才会返回，最长阻塞数秒。
+        这里改为：
+        1. 同步完成的收尾立即做（存配置、停定时器、置取消标志、清队列）；
+        2. 不在主线程 wait，把等待和回收丢给 QThreadPool 的全局线程；
+        3. 线程池线程全部是 daemon，进程退出时不会被它们拖住。
+        """
+        self._closing = True
+
+        # 1) 立刻停止所有可能再产生事件的入口
+        sync_worker = getattr(self, "sync_worker", None)
+        self.sync_monitoring = False
+        self._clipboard_read_pending = False
+        timer = getattr(self, "sync_poll_timer", None)
+        if timer is not None:
+            timer.stop()
+        if sync_worker is not None:
+            try:
+                sync_worker.stop()
+            except Exception:
+                pass
+
+        # 用 getattr 兜底：任何一个 worker 属性缺失都不应中断关闭流程
+        workers = [
+            sync_worker,
+            getattr(self, "sync_target_loader", None),
+            getattr(self, "sync_field_loader", None),
+            getattr(self, "image_worker", None),
+            getattr(self, "merge_worker", None),
+            getattr(self, "copy_worker", None),
+            getattr(self, "extract_worker", None),
+        ]
+
+        # 2) 先落盘配置，避免线程退出过程中的信号回写覆盖
+        try:
+            self.save_config()
+        except Exception as e:
+            print(f"关闭时保存配置失败: {e}")
+
+        # 3) 交给后台线程回收，主线程不再等待
+        self._detach_workers(workers)
         event.accept()
+
+    def _detach_workers(self, workers):
+        """把正在运行的 worker 交给后台线程等待退出，避免阻塞主线程"""
+        alive = []
+        for worker in workers:
+            if worker is None:
+                continue
+            try:
+                running = worker.isRunning()
+            except RuntimeError:
+                continue
+            if not running:
+                continue
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+            alive.append(worker)
+        if not alive:
+            return
+        QThreadPool.globalInstance().start(_WorkerReaper(alive))
 
     # ============================================================
     # 文件夹合并功能
@@ -4320,7 +4262,6 @@ class QuickFolderPanel(QMainWindow):
             added += 1
         if added:
             self.update_image_output_suggestion()
-            self.update_image_preview()
         return added
 
     def image_list_contains(self, path: str) -> bool:
@@ -4377,13 +4318,6 @@ class QuickFolderPanel(QMainWindow):
                 QMessageBox.information(self, "提示", "剪贴板中没有图片文件或图片文件夹")
         else:
             self.update_image_output_suggestion()
-            self.update_image_preview()
-
-    def image_clear_list(self):
-        """清空图片列表"""
-        self.image_list.clear()
-        self.image_output_entry.clear()
-        self.update_image_preview()
 
     def image_clear_list(self):
         """清空图片列表"""
@@ -4420,44 +4354,28 @@ class QuickFolderPanel(QMainWindow):
         self.image_merge_btn.setEnabled(not busy)
         self.image_progress.setVisible(busy)
 
-    def image_split_mode(self) -> str:
-        return self.image_split_mode_combo.currentData() or SPLIT_MODE_AUTO
-
-    def image_unit_value(self) -> int:
-        return max(1, int(self.image_unit_spin.value() or DEFAULT_PIECE_UNIT))
-
     def on_image_option_changed(self, _value=None):
-        """切分选项变化时同步控件可用性与预览，并保存配置"""
-        self.image_sync_controls()
-        self.update_image_preview()
+        """切分份数编辑完成后规范化并保存配置"""
+        self.image_parts_entry_sync()
         self.save_config()
 
-    def image_sync_controls(self):
-        """按当前切分模式同步控件可用状态（不触发保存，可在 UI 构建阶段调用）"""
-        auto_mode = self.image_split_mode() == SPLIT_MODE_AUTO
-        self.image_unit_spin.setEnabled(auto_mode)
-        self.image_parts_spin.setEnabled(not auto_mode)
-        self.image_unit_spin.setToolTip("每份的目标高度，最后一份不足的部分补白色")
-        self.image_parts_spin.setToolTip("按份数等分，尾部余量像素并入最后一份，不丢弃像素")
+    def image_parts_entry_sync(self):
+        """把输入框内容规范化为 2~500 的整数（仅当内容确实变了才写回）"""
+        text = self.image_parts_entry.text()
+        value = self.image_parts_value()
+        if text != str(value):
+            self.image_parts_entry.setText(str(value))
+        return value
 
-    def update_image_preview(self):
-        """更新批次预览：共几张图、切成几份"""
-        files = self.image_current_files()
-        if not files:
-            self.image_preview_label.setText("拖入或粘贴图片 / 图片文件夹")
-            return
-        if self.image_split_mode() == SPLIT_MODE_AUTO:
-            self.image_preview_label.setText(
-                f"已选 {len(files)} 张 → 每张独立纵向切分，每份 {self.image_unit_value()}px，"
-                f"最后一份不足时补白色（命名：原名_序号）"
-            )
-        else:
-            parts = max(1, self.image_parts_spin.value())
-            self.image_preview_label.setText(
-                f"已选 {len(files)} 张 → 每张独立纵向等分 {parts} 份，余量像素并入最后一份"
-            )
+    def image_parts_value(self) -> int:
+        """解析输入框里的切分份数，非法输入回退为 2"""
+        try:
+            parts = int(str(self.image_parts_entry.text()).strip())
+        except (TypeError, ValueError):
+            parts = 2
+        return max(2, min(parts, 500))
 
-    def image_run(self, mode: str, files: list, plan: list = None):
+    def image_run(self, mode: str, files: list):
         if self.image_worker and self.image_worker.isRunning():
             QMessageBox.information(self, "提示", "正在处理中，请稍候")
             return
@@ -4466,15 +4384,14 @@ class QuickFolderPanel(QMainWindow):
         os.makedirs(output, exist_ok=True)
 
         self.image_process_files = list(files)
-        tasks = plan if plan is not None else []
-        self.image_worker = ImageProcessWorker(mode, files, output, tasks)
+        self.image_worker = ImageProcessWorker(mode, files, output, self.image_parts_value())
         self.image_worker.progress.connect(self.on_image_progress)
         self.image_worker.error.connect(self.on_image_error)
         self.image_worker.finished.connect(self.on_image_finished)
         self.image_set_busy(True)
         if mode == ImageProcessWorker.MODE_SPLIT:
-            self.image_progress.setMaximum(max(1, len(tasks)))
-            batch_label = f"切分 {len(files)} 张 → {sum(t[1] for t in tasks)} 份"
+            self.image_progress.setMaximum(max(1, len(files)))
+            batch_label = f"切分 {len(files)} 张 × {self.image_parts_value()} 份"
         else:
             self.image_progress.setMaximum(1)
             batch_label = f"合并 {len(files)} 张 → 1 张"
@@ -4483,21 +4400,12 @@ class QuickFolderPanel(QMainWindow):
         self.image_worker.start()
 
     def image_start_split(self):
-        """批量纵向切分（每张原图独立处理，不做图片之间的合并）"""
+        """批量纵向切分（每张原图独立等分，不做图片之间的合并，不填充）"""
         files = self.image_current_files()
         if not files:
             QMessageBox.warning(self, "提示", "请先添加要切分的图片")
             return
-        plan = build_split_plan(
-            files,
-            self.image_split_mode(),
-            self.image_parts_spin.value(),
-            self.image_unit_value(),
-        )
-        if not plan:
-            QMessageBox.warning(self, "提示", "没有可读取的图片")
-            return
-        self.image_run(ImageProcessWorker.MODE_SPLIT, files, plan)
+        self.image_run(ImageProcessWorker.MODE_SPLIT, files)
 
     def image_start_merge(self):
         """批量纵向合并"""

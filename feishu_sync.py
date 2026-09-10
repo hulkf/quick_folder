@@ -172,17 +172,23 @@ class LarkCliClient:
             raise LarkCliError(f"无法启动 lark-cli: {exc}") from exc
 
         deadline = time.monotonic() + timeout
+        cancelled = False
         while True:
             try:
-                stdout, stderr = process.communicate(timeout=0.2)
+                stdout, stderr = process.communicate(timeout=0.05)
                 break
             except subprocess.TimeoutExpired:
                 if self.cancel_event is not None and self.cancel_event.is_set():
-                    self._terminate_process(process)
-                    raise LarkCliCancelled("同步已停止")
+                    # 取消请求：尽快杀掉子进程，不要再等剩下的超时时间
+                    stdout, stderr = self._terminate_process(process)
+                    cancelled = True
+                    break
                 if time.monotonic() >= deadline:
-                    self._terminate_process(process)
-                    raise LarkCliError("飞书请求超时，请检查网络后重试")
+                    stdout, stderr = self._terminate_process(process)
+                    break
+
+        if cancelled:
+            raise LarkCliCancelled("同步已停止")
 
         output = stdout if process.returncode == 0 else (stderr or stdout)
         payload = _decode_json(output)
@@ -205,8 +211,9 @@ class LarkCliClient:
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen):
+        """杀掉子进程并返回 (stdout, stderr)，尽力避免阻塞调用方"""
         if process.poll() is not None:
-            return
+            return process.communicate()
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             try:
@@ -223,10 +230,13 @@ class LarkCliClient:
         else:
             process.terminate()
         try:
-            process.communicate(timeout=2)
+            return process.communicate(timeout=1)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate()
+            try:
+                return process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                return "", ""
 
     def detect_identity(self) -> str:
         payload = self._run(["auth", "status", "--json", "--verify"], timeout=20.0)

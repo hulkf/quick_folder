@@ -8,7 +8,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QPoint, Qt, QMimeData, QUrl
-from PyQt5.QtGui import QDropEvent
+from PyQt5.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 
@@ -56,7 +56,8 @@ class FolderExpansionTest(unittest.TestCase):
         QTest.mouseClick(group.children[0].sec_icon, Qt.LeftButton)
         self.assertEqual(len(self.panel.folders), 2)
         parent_group = self.panel.common_list.itemWidget(self.panel.common_list.item(0))
-        self.assertEqual(parent_group.children, [])
+        self.assertEqual([row.path for row in parent_group.children], [str(self.child)])
+        self.assertEqual(parent_group.children[0].sec_icon.text(), "⬇")
         self.panel.toggle_folder_expanded(str(self.child))
         promoted = self.panel.common_list.itemWidget(self.panel.common_list.item(1))
         self.assertEqual([row.path for row in promoted.children], [str(self.grandchild)])
@@ -69,9 +70,18 @@ class FolderExpansionTest(unittest.TestCase):
         mime.setUrls([QUrl.fromLocalFile(str(source))])
         drop_point = QPoint(100, self.panel.common_list.visualItemRect(self.panel.common_list.item(0)).top() + 55)
         self.assertEqual(self.panel.common_list.folder_at(drop_point), str(self.child))
+        target_row = self.panel.common_list.row_at(drop_point)
+        original_callback = self.panel.common_list._file_drop_callback
+
+        def move_with_visible_target(paths, target):
+            self.assertTrue(target_row._drop_highlight)
+            original_callback(paths, target)
+
+        self.panel.common_list.set_file_drop_callback(move_with_visible_target)
         event = QDropEvent(drop_point, Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
         with patch.object(QMessageBox, "information"):
             self.panel.common_list.dropEvent(event)
+        self.assertFalse(target_row._drop_highlight)
         self.assertFalse(source.exists())
         self.assertEqual((self.child / "source.txt").read_text(encoding="utf-8"), "source")
         source.write_text("second", encoding="utf-8")
@@ -80,6 +90,27 @@ class FolderExpansionTest(unittest.TestCase):
             self.panel.common_list.dropEvent(event)
         self.assertTrue(source.exists())
         self.assertEqual((self.child / "source.txt").read_text(encoding="utf-8"), "source")
+
+    def test_file_drag_highlights_only_the_current_folder_row(self):
+        self.panel.toggle_folder_expanded(str(self.parent))
+        folder_list = self.panel.common_list
+        group = folder_list.itemWidget(folder_list.item(0))
+        source = self.root / "hover.txt"
+        source.write_text("hover", encoding="utf-8")
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(source))])
+        top = folder_list.visualItemRect(folder_list.item(0)).top()
+
+        for y, highlighted in [(top + 10, group.main_row), (top + 55, group.children[0])]:
+            event = QDragMoveEvent(QPoint(100, y), Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
+            folder_list.dragMoveEvent(event)
+            self.assertTrue(highlighted._drop_highlight)
+            other = group.children[0] if highlighted is group.main_row else group.main_row
+            self.assertFalse(other._drop_highlight)
+
+        folder_list.dragLeaveEvent(QDragLeaveEvent())
+        self.assertFalse(group.main_row._drop_highlight)
+        self.assertFalse(group.children[0]._drop_highlight)
 
     def test_drop_file_on_top_level_row(self):
         source = self.root / "top.txt"

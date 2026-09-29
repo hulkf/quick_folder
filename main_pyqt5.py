@@ -336,6 +336,7 @@ class DraggableListWidget(QListWidget):
         self._drop_callback = None
         self._move_callback = None
         self._file_drop_callback = None
+        self._highlighted_row = None
 
     def set_drop_callback(self, callback):
         self._drop_callback = callback
@@ -346,15 +347,37 @@ class DraggableListWidget(QListWidget):
     def set_file_drop_callback(self, callback):
         self._file_drop_callback = callback
 
-    def folder_at(self, pos):
+    def row_at(self, pos):
         item = self.itemAt(pos)
         if item is None:
             return None
         widget = self.itemWidget(item)
         if isinstance(widget, FolderGroupWidget):
             local_pos = QPoint(pos.x(), pos.y() - self.visualItemRect(item).top())
-            return widget.folder_at(local_pos)
+            return widget.row_at(local_pos)
         return None
+
+    def folder_at(self, pos):
+        row = self.row_at(pos)
+        return row.path if row else None
+
+    def _show_file_drop_target(self, pos, mime):
+        has_file = mime.hasUrls() and any(
+            url.isLocalFile() and os.path.isfile(url.toLocalFile()) for url in mime.urls()
+        )
+        row = self.row_at(pos) if has_file else None
+        if row is self._highlighted_row:
+            return
+        if self._highlighted_row:
+            self._highlighted_row.set_drop_highlight(False)
+        self._highlighted_row = row
+        if row:
+            row.set_drop_highlight(True)
+
+    def _clear_file_drop_target(self):
+        if self._highlighted_row:
+            self._highlighted_row.set_drop_highlight(False)
+            self._highlighted_row = None
 
     def startDrag(self, actions):
         item = self.currentItem()
@@ -374,8 +397,10 @@ class DraggableListWidget(QListWidget):
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
+            self._show_file_drop_target(event.pos(), event.mimeData())
             event.acceptProposedAction()
         else:
+            self._clear_file_drop_target()
             # 内部拖拽或跨列表拖拽
             source = event.source()
             if source and source != self:
@@ -385,13 +410,19 @@ class DraggableListWidget(QListWidget):
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasUrls():
+            self._show_file_drop_target(event.pos(), event.mimeData())
             event.acceptProposedAction()
         else:
+            self._clear_file_drop_target()
             source = event.source()
             if source and source != self:
                 event.acceptProposedAction()
             else:
                 super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._clear_file_drop_target()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
@@ -400,7 +431,13 @@ class DraggableListWidget(QListWidget):
             files = [path for path in paths if os.path.isfile(path)]
             target = self.folder_at(event.pos())
             if files and target and self._file_drop_callback:
-                self._file_drop_callback(files, target)
+                self._show_file_drop_target(event.pos(), event.mimeData())
+                try:
+                    self._file_drop_callback(files, target)
+                finally:
+                    self._clear_file_drop_target()
+            else:
+                self._clear_file_drop_target()
             if folders and self._drop_callback:
                 self._drop_callback(folders)
             if (files and target) or folders:
@@ -409,6 +446,7 @@ class DraggableListWidget(QListWidget):
             else:
                 event.ignore()
         else:
+            self._clear_file_drop_target()
             # 跨列表拖拽（从另一个列表拖入）
             source = event.source()
             if source and source != self and self._move_callback:
@@ -628,6 +666,9 @@ class FolderItemWidget(QWidget):
         self._selected = False
         self._normal_bg = theme['item_bg']
         self._selected_bg = theme['item_hover']
+        self._drop_highlight = False
+        self.setObjectName("folder_row")
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 4, 8, 4)
@@ -736,16 +777,30 @@ class FolderItemWidget(QWidget):
         """切换选中状态"""
         if FolderItemWidget._current_selected and FolderItemWidget._current_selected != self:
             FolderItemWidget._current_selected._selected = False
-            FolderItemWidget._current_selected.setStyleSheet(
-                f"background-color: {FolderItemWidget._current_selected._normal_bg}; border-radius: 4px;"
-            )
+            FolderItemWidget._current_selected._apply_row_style()
         self._selected = not self._selected
         if self._selected:
             FolderItemWidget._current_selected = self
         else:
             FolderItemWidget._current_selected = None
-        bg = self._selected_bg if self._selected else self._normal_bg
-        self.setStyleSheet(f"background-color: {bg}; border-radius: 4px;")
+        self._apply_row_style()
+
+    def set_drop_highlight(self, active: bool):
+        if self._drop_highlight != active:
+            self._drop_highlight = active
+            self._apply_row_style()
+
+    def _apply_row_style(self):
+        if self._drop_highlight:
+            color = QColor(self.theme["accent"])
+            background = f"rgba({color.red()}, {color.green()}, {color.blue()}, 90)"
+            border = f"2px solid {self.theme['accent']}"
+        else:
+            background = self._selected_bg if self._selected else self._normal_bg
+            border = "2px solid transparent"
+        self.setStyleSheet(
+            f"QWidget#folder_row {{ background-color: {background}; border: {border}; border-radius: 4px; }}"
+        )
 
     def open_folder(self):
         """打开文件夹"""
@@ -1083,10 +1138,14 @@ class FolderGroupWidget(QWidget):
         self.setFixedHeight(45 * (1 + len(children)))
 
     def folder_at(self, pos):
+        row = self.row_at(pos)
+        return row.path if row else None
+
+    def row_at(self, pos):
         if not self.rect().contains(pos):
             return None
         index = min(pos.y() // 45, len(self.children))
-        return self.main_row.path if index == 0 else self.children[index - 1].path
+        return self.main_row if index == 0 else self.children[index - 1]
 
 
 class LaunchGridArea(QWidget):
@@ -3547,6 +3606,8 @@ class QuickFolderPanel(QMainWindow):
 
     def refresh_folder_list(self):
         """刷新文件夹列表"""
+        self.common_list._clear_file_drop_target()
+        self.uncommon_list._clear_file_drop_target()
         self.common_list.clear()
         self.uncommon_list.clear()
 
@@ -3574,13 +3635,9 @@ class QuickFolderPanel(QMainWindow):
 
             children = []
             if expanded and os.path.isdir(path):
-                top_level_paths = {
-                    os.path.normcase(os.path.abspath(entry["path"])) for entry in self.folders
-                }
                 try:
                     child_paths = sorted(
-                        (entry.path for entry in os.scandir(path)
-                         if entry.is_dir() and os.path.normcase(os.path.abspath(entry.path)) not in top_level_paths),
+                        (entry.path for entry in os.scandir(path) if entry.is_dir()),
                         key=lambda p: os.path.basename(p).casefold(),
                     )
                 except OSError:

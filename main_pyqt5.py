@@ -335,12 +335,26 @@ class DraggableListWidget(QListWidget):
         self.setDropIndicatorShown(True)
         self._drop_callback = None
         self._move_callback = None
+        self._file_drop_callback = None
 
     def set_drop_callback(self, callback):
         self._drop_callback = callback
 
     def set_move_callback(self, callback):
         self._move_callback = callback
+
+    def set_file_drop_callback(self, callback):
+        self._file_drop_callback = callback
+
+    def folder_at(self, pos):
+        item = self.itemAt(pos)
+        if item is None:
+            return None
+        widget = self.itemWidget(item)
+        if isinstance(widget, FolderGroupWidget):
+            local_pos = QPoint(pos.x(), pos.y() - self.visualItemRect(item).top())
+            return widget.folder_at(local_pos)
+        return None
 
     def startDrag(self, actions):
         item = self.currentItem()
@@ -352,7 +366,7 @@ class DraggableListWidget(QListWidget):
         count = self.count()
         if count == 0:
             return QSize(super().sizeHint().width(), 45)
-        h = count * 55
+        h = sum(self.item(i).sizeHint().height() for i in range(count))
         return QSize(super().sizeHint().width(), h)
 
     def minimumSizeHint(self):
@@ -381,15 +395,19 @@ class DraggableListWidget(QListWidget):
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
-            # 外部文件/文件夹拖入
-            folders = []
-            for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if path and os.path.isdir(path):
-                    folders.append(path)
+            paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            folders = [path for path in paths if os.path.isdir(path)]
+            files = [path for path in paths if os.path.isfile(path)]
+            target = self.folder_at(event.pos())
+            if files and target and self._file_drop_callback:
+                self._file_drop_callback(files, target)
             if folders and self._drop_callback:
                 self._drop_callback(folders)
-            event.acceptProposedAction()
+            if (files and target) or folders:
+                event.setDropAction(Qt.MoveAction if files and target else Qt.CopyAction)
+                event.accept()
+            else:
+                event.ignore()
         else:
             # 跨列表拖拽（从另一个列表拖入）
             source = event.source()
@@ -586,16 +604,21 @@ class FolderItemWidget(QWidget):
     rename_requested = pyqtSignal(str, str)
     action_slot_replaced = pyqtSignal(int, str)
     clicked = pyqtSignal()
+    expand_requested = pyqtSignal(str)
+    promote_requested = pyqtSignal(str)
+    contents_changed = pyqtSignal()
 
     _current_selected = None
 
     def __init__(self, path: str, display_name: str, is_common: bool, theme: dict,
                  action_order: list = None, remove_prefixes: list = None,
-                 add_prefix: str = "", delete_file_patterns: list = None, parent=None):
+                 add_prefix: str = "", delete_file_patterns: list = None,
+                 is_child: bool = False, expanded: bool = False, parent=None):
         super().__init__(parent)
         self.path = path
         self.display_name = display_name
         self.is_common = is_common
+        self.is_child = is_child
         self.theme = theme
         self.action_order = action_order or DEFAULT_FOLDER_ACTION_ORDER
         self.remove_prefixes = remove_prefixes or []
@@ -611,16 +634,28 @@ class FolderItemWidget(QWidget):
         layout.setSpacing(4)
 
         # 左侧：图标和名称
-        self.sec_icon = QLabel("⭐" if is_common else "📦")
+        if not is_child:
+            expand_btn = QPushButton("▾" if expanded else "▸")
+            expand_btn.setFixedSize(20, 26)
+            expand_btn.setToolTip("收起下一级文件夹" if expanded else "展开下一级文件夹")
+            expand_btn.setStyleSheet(f"border: none; color: {theme['fg']}; background: transparent;")
+            expand_btn.clicked.connect(lambda: self.expand_requested.emit(self.path))
+            layout.addWidget(expand_btn)
+
+        self.sec_icon = QLabel("⬇" if is_child else ("⭐" if is_common else "📦"))
         self.sec_icon.setFont(QFont("Segoe UI Emoji", 11))
         self.sec_icon.setCursor(Qt.PointingHandCursor)
         self.sec_icon.setStyleSheet("background: transparent; padding: 2px;")
-        self.sec_icon.mousePressEvent = lambda e: self.section_toggled.emit(self.path, self.is_common)
+        self.sec_icon.setToolTip("添加到一级文件夹列表" if is_child else "切换常用/非常用")
+        self.sec_icon.mousePressEvent = (lambda e: self.promote_requested.emit(self.path)) if is_child else (lambda e: self.section_toggled.emit(self.path, self.is_common))
         layout.addWidget(self.sec_icon)
 
         exists = os.path.exists(path)
         folder_icon = QLabel("📂" if exists else "⚠️")
         folder_icon.setFont(QFont("Segoe UI Emoji", 11))
+        if not is_child:
+            folder_icon.setCursor(Qt.PointingHandCursor)
+            folder_icon.mousePressEvent = lambda e: self.expand_requested.emit(self.path)
         layout.addWidget(folder_icon)
 
         self.name_label = QLabel(display_name)
@@ -629,6 +664,9 @@ class FolderItemWidget(QWidget):
         self.name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.name_label.setMinimumWidth(0)
         self.name_label.setToolTip(display_name)
+        if not is_child:
+            self.name_label.setCursor(Qt.PointingHandCursor)
+            self.name_label.mousePressEvent = lambda e: self.expand_requested.emit(self.path)
         layout.addWidget(self.name_label, 1)
 
         button_box = QWidget()
@@ -661,7 +699,8 @@ class FolderItemWidget(QWidget):
             }}
         """)
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.path))
-        button_layout.addWidget(del_btn)
+        if not is_child:
+            button_layout.addWidget(del_btn)
         button_box.setFixedWidth(button_layout.sizeHint().width())
         layout.addWidget(button_box)
         self._update_name_elide()
@@ -833,6 +872,7 @@ class FolderItemWidget(QWidget):
         try:
             os.makedirs(new_path, exist_ok=False)
             QMessageBox.information(self, "完成", f"已新建文件夹:\n{new_path}")
+            self.contents_changed.emit()
         except FileExistsError:
             QMessageBox.warning(self, "提示", "同名文件夹已存在")
         except Exception as e:
@@ -1016,6 +1056,37 @@ class FolderItemWidget(QWidget):
         if errors > 0:
             msg += f"\n{errors} 个文件重命名失败"
         QMessageBox.information(self, "完成", msg)
+
+
+class FolderGroupWidget(QWidget):
+    """一个一级入口及其可见的直属子文件夹，列表排序时始终作为一项移动。"""
+
+    def __init__(self, main_row: FolderItemWidget, children: list, theme: dict, parent=None):
+        super().__init__(parent)
+        self.main_row = main_row
+        self.children = children
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(main_row)
+        for child in children:
+            branch = QWidget()
+            branch_layout = QHBoxLayout(branch)
+            branch_layout.setContentsMargins(30, 0, 0, 0)
+            branch_layout.setSpacing(0)
+            guide = QFrame()
+            guide.setFixedWidth(2)
+            guide.setStyleSheet(f"border-left: 1px dashed {theme['gray']};")
+            branch_layout.addWidget(guide)
+            branch_layout.addWidget(child, 1)
+            layout.addWidget(branch)
+        self.setFixedHeight(45 * (1 + len(children)))
+
+    def folder_at(self, pos):
+        if not self.rect().contains(pos):
+            return None
+        index = min(pos.y() // 45, len(self.children))
+        return self.main_row.path if index == 0 else self.children[index - 1].path
 
 
 class LaunchGridArea(QWidget):
@@ -1727,6 +1798,7 @@ class QuickFolderPanel(QMainWindow):
         self.sync_poll_timer.timeout.connect(self.on_sync_poll)
         self._clipboard_read_pending = False
         self.current_tab_index = 0
+        self.expanded_folders = set()
         self.launch_items = self.load_launch_items()
         self.launch_processes = {}
         self.launch_tiles = {}
@@ -2229,6 +2301,7 @@ class QuickFolderPanel(QMainWindow):
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
         self.common_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=True))
         self.common_list.set_move_callback(lambda data, pos: self.move_folder_to_section(data, "common", pos))
+        self.common_list.set_file_drop_callback(self.move_files_to_folder)
         common_layout.addWidget(self.common_list)
         self.common_list.setVisible(self.common_group.isChecked())
         layout.addWidget(self.common_group)
@@ -2262,6 +2335,7 @@ class QuickFolderPanel(QMainWindow):
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
         self.uncommon_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=False))
         self.uncommon_list.set_move_callback(lambda data, pos: self.move_folder_to_section(data, "uncommon", pos))
+        self.uncommon_list.set_file_drop_callback(self.move_files_to_folder)
         uncommon_layout.addWidget(self.uncommon_list)
         self.uncommon_list.setVisible(self.uncommon_group.isChecked())
         layout.addWidget(self.uncommon_group)
@@ -3451,33 +3525,66 @@ class QuickFolderPanel(QMainWindow):
         self.uncommon_list.clear()
 
         for folder in self.folders:
+            path = folder["path"]
+            expanded = path in self.expanded_folders
             widget = FolderItemWidget(
-                folder["path"],
+                path,
                 folder["display_name"],
                 folder["is_common"],
                 self.theme,
                 self.folder_action_order,
                 self.folder_remove_prefixes,
                 self.folder_add_prefix,
-                self.folder_delete_file_patterns
+                self.folder_delete_file_patterns,
+                expanded=expanded,
             )
             # 连接信号
             widget.delete_requested.connect(self.remove_folder)
             widget.section_toggled.connect(self.toggle_section)
             widget.rename_requested.connect(self.rename_folder)
             widget.action_slot_replaced.connect(self.move_folder_action_to_slot)
+            widget.expand_requested.connect(self.toggle_folder_expanded)
+            widget.contents_changed.connect(self.refresh_folder_list)
+
+            children = []
+            if expanded and os.path.isdir(path):
+                top_level_paths = {
+                    os.path.normcase(os.path.abspath(entry["path"])) for entry in self.folders
+                }
+                try:
+                    child_paths = sorted(
+                        (entry.path for entry in os.scandir(path)
+                         if entry.is_dir() and os.path.normcase(os.path.abspath(entry.path)) not in top_level_paths),
+                        key=lambda p: os.path.basename(p).casefold(),
+                    )
+                except OSError:
+                    child_paths = []
+                for child_path in child_paths:
+                    child = FolderItemWidget(
+                        child_path, os.path.basename(child_path), folder["is_common"],
+                        self.theme, self.folder_action_order, self.folder_remove_prefixes,
+                        self.folder_add_prefix, self.folder_delete_file_patterns,
+                        is_child=True,
+                    )
+                    child.rename_requested.connect(self.rename_folder)
+                    child.action_slot_replaced.connect(self.move_folder_action_to_slot)
+                    child.promote_requested.connect(self.promote_child_folder)
+                    child.contents_changed.connect(self.refresh_folder_list)
+                    children.append(child)
+
+            group = FolderGroupWidget(widget, children, self.theme)
 
             item = QListWidgetItem()
-            item.setSizeHint(widget.sizeHint() + QSize(0, 10))
+            item.setSizeHint(QSize(0, group.height() + 10))
             item.setData(Qt.UserRole, folder)
 
             if folder["is_common"]:
                 self.common_list.addItem(item)
-                self.common_list.setItemWidget(item, widget)
+                self.common_list.setItemWidget(item, group)
                 widget.clicked.connect(lambda checked=False, i=item, lst=self.common_list: lst.setCurrentItem(i))
             else:
                 self.uncommon_list.addItem(item)
-                self.uncommon_list.setItemWidget(item, widget)
+                self.uncommon_list.setItemWidget(item, group)
                 widget.clicked.connect(lambda checked=False, i=item, lst=self.uncommon_list: lst.setCurrentItem(i))
 
         self.empty_label.setVisible(len(self.folders) == 0)
@@ -3490,6 +3597,51 @@ class QuickFolderPanel(QMainWindow):
 
         # 自动调整窗口高度
         self.adjust_window_height()
+
+    def toggle_folder_expanded(self, path: str):
+        if path in self.expanded_folders:
+            self.expanded_folders.remove(path)
+        else:
+            self.expanded_folders.add(path)
+        self.refresh_folder_list()
+
+    def promote_child_folder(self, path: str):
+        key = os.path.normcase(os.path.abspath(path))
+        if any(os.path.normcase(os.path.abspath(f["path"])) == key for f in self.folders):
+            QMessageBox.information(self, "提示", "这个文件夹已在一级列表中")
+            return
+        parent_key = os.path.normcase(os.path.abspath(os.path.dirname(path)))
+        parent_index = next(
+            (i for i, folder in enumerate(self.folders)
+             if os.path.normcase(os.path.abspath(folder["path"])) == parent_key), None
+        )
+        is_common = self.folders[parent_index]["is_common"] if parent_index is not None else True
+        entry = {"path": path, "display_name": os.path.basename(path), "is_common": is_common}
+        self.folders.insert(parent_index + 1 if parent_index is not None else len(self.folders), entry)
+        self.refresh_folder_list()
+        self.save_config()
+
+    def move_files_to_folder(self, paths: list, target: str):
+        if not os.path.isdir(target):
+            QMessageBox.warning(self, "移动失败", f"目标文件夹不存在:\n{target}")
+            return
+        moved, skipped = 0, []
+        for source in paths:
+            if not os.path.isfile(source):
+                continue
+            destination = os.path.join(target, os.path.basename(source))
+            if os.path.exists(destination):
+                skipped.append(f"{os.path.basename(source)}：目标已有同名文件")
+                continue
+            try:
+                shutil.move(source, destination)
+                moved += 1
+            except OSError as exc:
+                skipped.append(f"{os.path.basename(source)}：{exc}")
+        message = f"已移动 {moved} 个文件到:\n{target}"
+        if skipped:
+            message += "\n\n未移动:\n" + "\n".join(skipped)
+        QMessageBox.information(self, "移动结果", message)
 
     def on_folder_section_toggled(self, section: str, checked: bool):
         if section == "common":
@@ -3504,28 +3656,26 @@ class QuickFolderPanel(QMainWindow):
         if getattr(self, "current_tab_index", 0) != 0:
             return
         # 分别计算常用和非常用文件夹数量
-        common_count = sum(1 for f in self.folders if f["is_common"])
-        uncommon_count = sum(1 for f in self.folders if not f["is_common"])
+        common_height = self.common_list.sizeHint().height()
+        uncommon_height = self.uncommon_list.sizeHint().height()
 
         # 基础高度：标题栏(36) + 工具栏(36) + 间距(16)
         base_height = 88
         # 每个QGroupBox开销：margin-top(12) + padding-top(12) + border(2) = 26
         group_overhead = 26
-        # 每个文件夹项高度55
-        item_height = 55
         # 最小和最大高度
         min_height = 200
         max_height = 700
 
-        total_items = 0
+        list_height = 0
         if not hasattr(self, "common_group") or self.common_group.isChecked():
-            total_items += common_count
+            list_height += common_height
         if not hasattr(self, "uncommon_group") or self.uncommon_group.isChecked():
-            total_items += uncommon_count
-        if total_items == 0:
+            list_height += uncommon_height
+        if not self.folders:
             content_height = base_height + group_overhead * 2 + 45
         else:
-            content_height = base_height + group_overhead * 2 + total_items * item_height
+            content_height = base_height + group_overhead * 2 + list_height
         new_height = max(min_height, min(max_height, content_height))
 
         # 保持窗口位置不变，只调整高度
@@ -3694,6 +3844,9 @@ class QuickFolderPanel(QMainWindow):
         try:
             # 重命名实际文件夹
             os.rename(path, new_path)
+            if path in self.expanded_folders:
+                self.expanded_folders.remove(path)
+                self.expanded_folders.add(new_path)
 
             # 更新配置中的路径
             for folder in self.folders:

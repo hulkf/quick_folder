@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtCore import QPoint, Qt, QMimeData, QUrl
 from PyQt5.QtGui import QDropEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QMessageBox, QPushButton
+from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 
 import main_pyqt5
 
@@ -90,6 +91,50 @@ class FolderExpansionTest(unittest.TestCase):
         with patch.object(QMessageBox, "information"):
             self.panel.common_list.dropEvent(QDropEvent(point, Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier))
         self.assertEqual((self.parent / "top.txt").read_text(encoding="utf-8"), "top")
+
+    def test_managed_folder_refresh_and_saved_setting(self):
+        self.assertEqual(self.panel.managed_folder_path, "")
+        managed = self.root / "managed"
+        managed.mkdir()
+        (managed / "today-a").mkdir()
+        (managed / "today-b").mkdir()
+        (managed / "today-a" / "nested").mkdir()
+        (managed / "file.txt").write_text("not a folder", encoding="utf-8")
+
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=str(managed)):
+            self.panel.select_managed_folder()
+        self.assertEqual(self.panel.managed_folder_entry.text(), str(managed))
+        refresh_button = next(button for button in self.panel.folder_tab.findChildren(QPushButton)
+                              if button.text() == "🔄 刷新管理文件夹")
+        with patch.object(QMessageBox, "information"):
+            refresh_button.click()
+            self.panel.refresh_managed_folder()
+        self.assertEqual({f["display_name"] for f in self.panel.folders[:2]}, {"today-a", "today-b"})
+        self.assertEqual(len(self.panel.folders), 3)
+        self.assertEqual(self.panel.folders[2]["path"], str(self.parent))
+
+        reopened = main_pyqt5.QuickFolderPanel()
+        try:
+            self.assertEqual(reopened.managed_folder_path, str(managed))
+            self.assertEqual(reopened.managed_folder_entry.text(), str(managed))
+        finally:
+            reopened.launch_timer.stop()
+            reopened.close()
+
+    def test_managed_folder_ignores_other_dates(self):
+        managed = self.root / "managed"
+        managed.mkdir()
+        (managed / "created-today").mkdir()
+        self.panel.managed_folder_path = str(managed)
+
+        class Tomorrow(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return super().now(tz) + timedelta(days=1)
+
+        with patch.object(main_pyqt5, "datetime", Tomorrow), patch.object(QMessageBox, "information"):
+            self.panel.refresh_managed_folder()
+        self.assertEqual(len(self.panel.folders), 1)
 
 if __name__ == "__main__":
     unittest.main()

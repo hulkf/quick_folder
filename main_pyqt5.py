@@ -1769,6 +1769,7 @@ class QuickFolderPanel(QMainWindow):
         self.folder_add_prefix = self.config.get("folder_add_prefix", "")
         self.folder_delete_file_patterns = self.parse_prefix_config(self.config.get("folder_delete_file_patterns", ""))
         self.folder_palette_actions = self.normalize_folder_palette_actions(self.config.get("folder_palette_actions"))
+        self.managed_folder_path = self.config.get("managed_folder_path", "")
         sync_config = self.config.get("feishu_sync", {})
         self.sync_base_token = sync_config.get("base_token", "")
         self.sync_identity = sync_config.get("identity", "")
@@ -1862,6 +1863,7 @@ class QuickFolderPanel(QMainWindow):
                     if hasattr(self, "folder_delete_file_entry")
                     else self.config.get("folder_delete_file_patterns", ""),
                 "folder_palette_actions": self.folder_palette_actions,
+                "managed_folder_path": self.managed_folder_path,
                 "folder_sections_collapsed": {
                     "common": self.common_group.isChecked() is False
                         if hasattr(self, "common_group")
@@ -2261,6 +2263,9 @@ class QuickFolderPanel(QMainWindow):
         paste_btn = QPushButton("📋 粘贴文件夹")
         paste_btn.clicked.connect(self.paste_folder_tab_folders)
         toolbar.addWidget(paste_btn)
+        refresh_managed_btn = QPushButton("🔄 刷新管理文件夹")
+        refresh_managed_btn.clicked.connect(self.refresh_managed_folder)
+        toolbar.addWidget(refresh_managed_btn)
         toolbar.addStretch()
         self.folder_action_palette_box = QWidget()
         self.folder_action_palette_box.setFixedWidth(self.folder_action_area_width())
@@ -3168,6 +3173,27 @@ class QuickFolderPanel(QMainWindow):
         system_layout.addWidget(startup_hint)
         layout.addWidget(system_group)
 
+        managed_group = QGroupBox("管理文件夹")
+        managed_layout = QVBoxLayout(managed_group)
+        managed_row = QHBoxLayout()
+        self.managed_folder_entry = QLineEdit(self.managed_folder_path)
+        self.managed_folder_entry.setReadOnly(True)
+        self.managed_folder_entry.setPlaceholderText("尚未指定管理文件夹")
+        self.managed_folder_entry.setToolTip(self.managed_folder_path)
+        managed_row.addWidget(self.managed_folder_entry, 1)
+        select_managed_btn = QPushButton("选择文件夹")
+        select_managed_btn.clicked.connect(self.select_managed_folder)
+        managed_row.addWidget(select_managed_btn)
+        clear_managed_btn = QPushButton("清除")
+        clear_managed_btn.clicked.connect(self.clear_managed_folder)
+        managed_row.addWidget(clear_managed_btn)
+        managed_layout.addLayout(managed_row)
+        managed_hint = QLabel("点击文件夹页的「刷新管理文件夹」，将此目录下今天新建的直属文件夹加入常用列表前面。")
+        managed_hint.setWordWrap(True)
+        managed_hint.setStyleSheet(f"color: {self.theme['gray']}; font-size: 11px;")
+        managed_layout.addWidget(managed_hint)
+        layout.addWidget(managed_group)
+
         folder_actions_group = QGroupBox("文件夹功能项")
         folder_actions_layout = QVBoxLayout(folder_actions_group)
         self.folder_action_order_widget = FolderActionOrderWidget(self.theme)
@@ -3697,6 +3723,61 @@ class QuickFolderPanel(QMainWindow):
                 })
                 self.refresh_folder_list()
                 self.save_config()
+
+    def select_managed_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "选择管理文件夹", self.managed_folder_path or "")
+        if path:
+            self.managed_folder_path = os.path.normpath(path)
+            self.managed_folder_entry.setText(self.managed_folder_path)
+            self.managed_folder_entry.setToolTip(self.managed_folder_path)
+            self.save_config()
+
+    def clear_managed_folder(self):
+        self.managed_folder_path = ""
+        self.managed_folder_entry.clear()
+        self.managed_folder_entry.setToolTip("")
+        self.save_config()
+
+    def refresh_managed_folder(self):
+        """将管理目录下今天创建的直属文件夹添加到一级列表前端。"""
+        root = self.managed_folder_path
+        if not root:
+            QMessageBox.information(self, "提示", "请先在设置页指定管理文件夹")
+            return
+        if not os.path.isdir(root):
+            QMessageBox.warning(self, "提示", f"管理文件夹不存在或不可访问:\n{root}")
+            return
+
+        today = datetime.now().date()
+        known = {os.path.normcase(os.path.abspath(folder["path"])) for folder in self.folders}
+        found = []
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    if not entry.is_dir():
+                        continue
+                    created = entry.stat().st_ctime
+                    if datetime.fromtimestamp(created).date() != today:
+                        continue
+                    key = os.path.normcase(os.path.abspath(entry.path))
+                    if key not in known:
+                        known.add(key)
+                        found.append((created, entry.path))
+        except OSError as exc:
+            QMessageBox.warning(self, "刷新失败", f"读取管理文件夹失败:\n{exc}")
+            return
+
+        found.sort(key=lambda item: item[0], reverse=True)
+        new_folders = [
+            {"path": path, "display_name": os.path.basename(path), "is_common": True}
+            for _, path in found
+        ]
+        if new_folders:
+            self.folders = new_folders + self.folders
+            self.common_group.setChecked(True)
+            self.refresh_folder_list()
+            self.save_config()
+        QMessageBox.information(self, "刷新完成", f"已添加 {len(new_folders)} 个今天新建的文件夹")
 
     def add_folders_from_drop(self, paths: list, is_common: bool = True):
         """从拖拽添加文件夹（添加到顶部）"""

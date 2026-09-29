@@ -664,11 +664,8 @@ class FolderItemWidget(QWidget):
         self.delete_file_patterns = delete_file_patterns or []
         self._name_full_text = display_name
         self._selected = False
-        self._normal_bg = theme['item_bg']
-        self._selected_bg = theme['item_hover']
         self._drop_highlight = False
         self.setObjectName("folder_row")
-        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 4, 8, 4)
@@ -792,15 +789,16 @@ class FolderItemWidget(QWidget):
 
     def _apply_row_style(self):
         if self._drop_highlight:
+            self.setAttribute(Qt.WA_StyledBackground, True)
             color = QColor(self.theme["accent"])
             background = f"rgba({color.red()}, {color.green()}, {color.blue()}, 90)"
             border = f"2px solid {self.theme['accent']}"
+            self.setStyleSheet(
+                f"QWidget#folder_row {{ background-color: {background}; border: {border}; border-radius: 4px; }}"
+            )
         else:
-            background = self._selected_bg if self._selected else self._normal_bg
-            border = "2px solid transparent"
-        self.setStyleSheet(
-            f"QWidget#folder_row {{ background-color: {background}; border: {border}; border-radius: 4px; }}"
-        )
+            self.setStyleSheet("")
+            self.setAttribute(Qt.WA_StyledBackground, False)
 
     def open_folder(self):
         """打开文件夹"""
@@ -2361,6 +2359,11 @@ class QuickFolderPanel(QMainWindow):
         common_layout.setContentsMargins(4, 4, 4, 0)
         common_layout.setSpacing(2)
         self.common_list = DraggableListWidget()
+        folder_list_style = (
+            f"QListWidget::item:hover, QListWidget::item:selected {{ "
+            f"background: transparent; color: {self.theme['fg']}; border: none; }}"
+        )
+        self.common_list.setStyleSheet(folder_list_style)
         self.common_list.setDragDropMode(QListWidget.DragDrop)
         self.common_list.model().rowsMoved.connect(self.on_folder_reordered)
         self.common_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=True))
@@ -2395,6 +2398,7 @@ class QuickFolderPanel(QMainWindow):
         uncommon_layout.setContentsMargins(4, 4, 4, 0)
         uncommon_layout.setSpacing(2)
         self.uncommon_list = DraggableListWidget()
+        self.uncommon_list.setStyleSheet(folder_list_style)
         self.uncommon_list.setDragDropMode(QListWidget.DragDrop)
         self.uncommon_list.model().rowsMoved.connect(self.on_folder_reordered)
         self.uncommon_list.set_drop_callback(lambda paths: self.add_folders_from_drop(paths, is_common=False))

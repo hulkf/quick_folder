@@ -95,6 +95,11 @@ class FolderExpansionTest(unittest.TestCase):
         self.panel.toggle_folder_expanded(str(self.parent))
         folder_list = self.panel.common_list
         group = folder_list.itemWidget(folder_list.item(0))
+        self.assertEqual(group.main_row.styleSheet(), "")
+        self.assertEqual(group.children[0].styleSheet(), "")
+        self.assertFalse(group.main_row.testAttribute(Qt.WA_StyledBackground))
+        self.assertIn("item:selected", folder_list.styleSheet())
+        self.assertIn("background: transparent", folder_list.styleSheet())
         source = self.root / "hover.txt"
         source.write_text("hover", encoding="utf-8")
         mime = QMimeData()
@@ -105,12 +110,19 @@ class FolderExpansionTest(unittest.TestCase):
             event = QDragMoveEvent(QPoint(100, y), Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
             folder_list.dragMoveEvent(event)
             self.assertTrue(highlighted._drop_highlight)
+            self.assertTrue(highlighted.testAttribute(Qt.WA_StyledBackground))
+            self.assertIn("border: 2px solid", highlighted.styleSheet())
             other = group.children[0] if highlighted is group.main_row else group.main_row
             self.assertFalse(other._drop_highlight)
+            self.assertEqual(other.styleSheet(), "")
 
         folder_list.dragLeaveEvent(QDragLeaveEvent())
         self.assertFalse(group.main_row._drop_highlight)
         self.assertFalse(group.children[0]._drop_highlight)
+        self.assertEqual(group.main_row.styleSheet(), "")
+        self.assertEqual(group.children[0].styleSheet(), "")
+        self.assertFalse(group.main_row.testAttribute(Qt.WA_StyledBackground))
+        self.assertFalse(group.children[0].testAttribute(Qt.WA_StyledBackground))
 
     def test_drop_file_on_top_level_row(self):
         source = self.root / "top.txt"

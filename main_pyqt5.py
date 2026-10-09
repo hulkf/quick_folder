@@ -3777,10 +3777,10 @@ class QuickFolderPanel(QMainWindow):
             content_height = base_height + group_overhead * 2 + list_height
         new_height = max(min_height, min(max_height, content_height))
 
-        # 保持窗口位置不变，只调整高度
-        x = self.x()
-        y = self.y()
-        self.setGeometry(x, y, self.width(), new_height)
+        # 顶层窗口的 pos() 含标题栏偏移，不能将它传给客户区坐标的 setGeometry()。
+        # 只改尺寸，避免每次展开/收起都把窗口向上挪一个标题栏高度。
+        if new_height != self.height():
+            self.resize(self.width(), new_height)
 
     def add_folder(self):
         """添加文件夹"""

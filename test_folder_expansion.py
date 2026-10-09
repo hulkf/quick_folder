@@ -65,6 +65,14 @@ class FolderExpansionTest(unittest.TestCase):
         promoted = self.panel.common_list.itemWidget(self.panel.common_list.item(1))
         self.assertEqual([row.path for row in promoted.children], [str(self.grandchild)])
 
+    def test_expansion_resizes_without_reapplying_window_coordinates(self):
+        original_position = self.panel.frameGeometry().topLeft()
+        with patch.object(self.panel, "setGeometry", side_effect=AssertionError("height adjustment must not set window coordinates")):
+            for _ in range(4):
+                self.panel.toggle_folder_expanded(str(self.parent))
+                self.app.processEvents()
+        self.assertEqual(self.panel.frameGeometry().topLeft(), original_position)
+
     def test_drop_file_on_child_moves_it_without_overwriting(self):
         self.panel.toggle_folder_expanded(str(self.parent))
         source = self.root / "source.txt"

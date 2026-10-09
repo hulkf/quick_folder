@@ -78,3 +78,4 @@ Quick Folder 是一个面向 Windows 的 PyQt5 桌面效率工具，主要用于
 - 仓库可能同时存在用户尚未提交的开发内容。执行同步时必须按任务精确暂存文件，禁止直接使用会把所有改动一并纳入的宽泛提交方式。
 - 2026-09-29：文件夹列表展开项采用一个 `QListWidgetItem` 包住一级行及其直属子目录，避免一级排序时拆散子目录。外部文件拖放落点用 `visualItemRect()` 计算；在 Windows 的 Qt offscreen 测试中，跨 widget 的 `mapTo()` 曾触发 access violation。窗口高度必须传整数给 `setGeometry()`。已通过界面测试和完整 unittest 验证；正式 Windows 桌面拖放仍需人工复核。
 - 2026-10-09：文件夹行高同时决定二级行布局与拖文件落点，一级项另有行间距；调整时统一修改 `FOLDER_ROW_HEIGHT`、`FOLDER_ITEM_GAP`，并验证一级/二级拖放目标及实际 `visualItemRect()` 高度。本次调整为 42 像素行高加 4 像素一级间距，离屏界面显示无按钮遮挡，完整测试通过。
+- 2026-10-09：Windows 顶层窗口的 `pos()` 包含标题栏位置，`setGeometry()` 却按客户区坐标定位；把 `self.x()/self.y()` 传回 `setGeometry()` 会在每次文件夹展开/收起时将窗口上移约一个标题栏高度。自动调整高度只调用 `resize()`，且尺寸未变时跳过。原生 Windows 窗口连续展开/收起并在 300/567 像素高度间切换时，窗口左上角保持不变；回归测试禁止再次从高度调整路径调用 `setGeometry()`。

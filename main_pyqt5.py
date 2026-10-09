@@ -45,6 +45,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional
+from config_store import read_config, write_config
 
 from feishu_sync import (
     FeishuClipboardSyncWorker,
@@ -1880,16 +1881,23 @@ class QuickFolderPanel(QMainWindow):
 
     def load_config(self) -> dict:
         """加载配置文件"""
+        self._config_load_failed = False
         try:
             if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                return read_config(CONFIG_FILE)
         except Exception as e:
+            self._config_load_failed = True
             print(f"加载配置失败: {e}")
+            QTimer.singleShot(0, lambda: QMessageBox.warning(
+                self, "配置读取失败，已停止保存",
+                "原配置无法读取。本次使用临时默认设置，关闭时不会覆盖原文件。\n"
+                "请先修复 config.json，或从 config.json.bak 恢复后重新启动。"))
         return {"folders": [], "theme": "dark_teal", "window_pos": None}
 
     def save_config(self):
         """保存配置文件"""
+        if self._config_load_failed:
+            return
         try:
             config = {
                 "folders": [(f["path"], f["is_common"]) for f in self.folders],
@@ -1948,11 +1956,13 @@ class QuickFolderPanel(QMainWindow):
                     "height": self.height()
                 }
             }
+            write_config(CONFIG_FILE, config)
             self.config = config
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"保存配置失败: {e}")
+            if not getattr(self, "_config_save_warning_shown", False):
+                self._config_save_warning_shown = True
+                QMessageBox.warning(self, "配置保存失败", "设置未能保存，原配置已保留。\n请检查配置文件及目录权限后重启程序。")
 
     def apply_window_position(self):
         """应用窗口位置"""
@@ -3599,13 +3609,13 @@ class QuickFolderPanel(QMainWindow):
         folders_data = self.config.get("folders", [])
         self.folders = []
         for path, is_common in folders_data:
-            if os.path.exists(path):
-                display_name = os.path.basename(path) or path
-                self.folders.append({
-                    "path": path,
-                    "display_name": display_name,
-                    "is_common": is_common
-                })
+            # 临时断盘、网络不可用或目录移动都不能自动删除用户记录。
+            display_name = os.path.basename(path) or path
+            self.folders.append({
+                "path": path,
+                "display_name": display_name,
+                "is_common": is_common
+            })
         self.refresh_folder_list()
 
     def refresh_folder_list(self):

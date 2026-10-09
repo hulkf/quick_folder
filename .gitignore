@@ -3,5 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 config.json
+config.json.bak
+config.json.*.tmp
+config.json.bak.*.tmp
 startup.log
 *.log

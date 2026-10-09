@@ -49,8 +49,11 @@ class FolderExpansionTest(unittest.TestCase):
         expand.click()
         group = self.panel.common_list.itemWidget(self.panel.common_list.item(0))
         self.assertEqual([row.path for row in group.children], [str(self.child)])
+        self.assertEqual(group.height(), main_pyqt5.FOLDER_ROW_HEIGHT * 2)
+        self.assertEqual(self.panel.common_list.item(0).sizeHint().height(), group.height() + main_pyqt5.FOLDER_ITEM_GAP)
+        self.assertEqual(self.panel.common_list.visualItemRect(self.panel.common_list.item(0)).height(), group.height() + main_pyqt5.FOLDER_ITEM_GAP)
         self.assertEqual(group.folder_at(QPoint(100, 10)), str(self.parent))
-        self.assertEqual(group.folder_at(QPoint(100, 55)), str(self.child))
+        self.assertEqual(group.folder_at(QPoint(100, main_pyqt5.FOLDER_ROW_HEIGHT + 10)), str(self.child))
         self.assertFalse(group.children[0].findChildren(main_pyqt5.FolderGroupWidget))
 
         QTest.mouseClick(group.children[0].sec_icon, Qt.LeftButton)
@@ -68,7 +71,7 @@ class FolderExpansionTest(unittest.TestCase):
         source.write_text("source", encoding="utf-8")
         mime = QMimeData()
         mime.setUrls([QUrl.fromLocalFile(str(source))])
-        drop_point = QPoint(100, self.panel.common_list.visualItemRect(self.panel.common_list.item(0)).top() + 55)
+        drop_point = QPoint(100, self.panel.common_list.visualItemRect(self.panel.common_list.item(0)).top() + main_pyqt5.FOLDER_ROW_HEIGHT + 10)
         self.assertEqual(self.panel.common_list.folder_at(drop_point), str(self.child))
         target_row = self.panel.common_list.row_at(drop_point)
         original_callback = self.panel.common_list._file_drop_callback
@@ -106,7 +109,7 @@ class FolderExpansionTest(unittest.TestCase):
         mime.setUrls([QUrl.fromLocalFile(str(source))])
         top = folder_list.visualItemRect(folder_list.item(0)).top()
 
-        for y, highlighted in [(top + 10, group.main_row), (top + 55, group.children[0])]:
+        for y, highlighted in [(top + 10, group.main_row), (top + main_pyqt5.FOLDER_ROW_HEIGHT + 10, group.children[0])]:
             event = QDragMoveEvent(QPoint(100, y), Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
             folder_list.dragMoveEvent(event)
             self.assertTrue(highlighted._drop_highlight)

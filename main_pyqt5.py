@@ -90,6 +90,8 @@ FOLDER_ACTION_BUTTON_SPACING = 4
 FOLDER_ACTION_ROW_RIGHT_INSET = 28
 FOLDER_ACTION_MIN_WIDTH = 50
 FOLDER_ACTION_HORIZONTAL_PADDING = 26
+FOLDER_ROW_HEIGHT = 42
+FOLDER_ITEM_GAP = 4
 try:
     from PIL import Image, ImageOps
     PILLOW_AVAILABLE = True
@@ -1134,7 +1136,7 @@ class FolderGroupWidget(QWidget):
             branch_layout.addWidget(guide)
             branch_layout.addWidget(child, 1)
             layout.addWidget(branch)
-        self.setFixedHeight(45 * (1 + len(children)))
+        self.setFixedHeight(FOLDER_ROW_HEIGHT * (1 + len(children)))
 
     def folder_at(self, pos):
         row = self.row_at(pos)
@@ -1143,7 +1145,7 @@ class FolderGroupWidget(QWidget):
     def row_at(self, pos):
         if not self.rect().contains(pos):
             return None
-        index = min(pos.y() // 45, len(self.children))
+        index = min(pos.y() // FOLDER_ROW_HEIGHT, len(self.children))
         return self.main_row if index == 0 else self.children[index - 1]
 
 
@@ -3672,7 +3674,7 @@ class QuickFolderPanel(QMainWindow):
             group = FolderGroupWidget(widget, children, self.theme)
 
             item = QListWidgetItem()
-            item.setSizeHint(QSize(0, group.height() + 10))
+            item.setSizeHint(QSize(0, group.height() + FOLDER_ITEM_GAP))
             item.setData(Qt.UserRole, folder)
 
             if folder["is_common"]:
